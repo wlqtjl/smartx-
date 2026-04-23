@@ -101,9 +101,9 @@ class SocketClientImpl {
     if (!this.shouldConnect) return;
     if (this.reconnectTimer !== null) return;
     const attempt = this.reconnectAttempts++;
-    // 指数退避 + 最多 30% 抖动；使用 Math.random 仅作非安全时序抖动。
+    // 指数退避 + 最多 30% 抖动。Math.random 仅用于时序抖动（非安全上下文）。
     const base = Math.min(RECONNECT_MAX_MS, RECONNECT_MIN_MS * 2 ** attempt);
-    // eslint-disable-next-line -- 时序抖动，非安全上下文
+    // eslint-disable-next-line sonarjs/pseudo-random -- 时序抖动无安全要求
     const jitter = base * 0.3 * Math.random();
     const delay = Math.round(base + jitter);
     this.reconnectTimer = window.setTimeout(() => {

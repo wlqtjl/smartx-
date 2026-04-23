@@ -242,20 +242,17 @@ export const createApiRouter = (app: AppContainer): Router => {
     requireSession(app),
     wrap((req, res) => {
       const task = app.fsm.requireTask(req.params.id);
-      const body = (req.body ?? {}) as { speedMbps?: unknown; tickMs?: unknown };
+      const body = (req.body ?? {}) as { speedMbps?: unknown };
       const speedMbps = typeof body.speedMbps === 'number' && body.speedMbps > 0
         ? Math.min(100_000, body.speedMbps)
         : 800;
-      const tickMs = typeof body.tickMs === 'number' && body.tickMs > 0
-        ? Math.min(5000, Math.max(50, body.tickMs))
-        : 200;
       let phase = app.dataSyncs.get(task.id);
       if (!phase) {
         phase = new DataSyncPhase();
         app.dataSyncs.set(task.id, phase);
       }
-      phase.start(task, speedMbps, tickMs);
-      res.json({ ok: true, speedMbps, tickMs });
+      phase.start(task, speedMbps);
+      res.json({ ok: true, speedMbps });
     }),
   );
 

@@ -75,21 +75,33 @@ export const SYNC_CHALLENGES: SyncChallenge[] = [
   },
 ];
 
+/**
+ * 服务端固定的 tick 周期（ms）。
+ * 安全性：定时器的周期必须为模块常量，不能来自外部输入，
+ * 否则会触发 CodeQL `js/resource-exhaustion`（用户可控定时器周期）风险。
+ */
+const TICK_MS = 200;
+
 export class DataSyncPhase {
   private handle: NodeJS.Timeout | null = null;
 
-  start(task: MigrationTask, speedMbps = 800, tickMs = 200): void {
+  start(task: MigrationTask, speedMbps = 800): void {
     this.stop();
-    const totalBytes = task.progress.dataTotalGB * 1024 ** 3;
-    const bytesPerTick = ((speedMbps * 1_000_000) / 8) * (tickMs / 1000);
+    // 速度参数允许客户端建议，但严格限定在安全范围。
+    const speedInRange =
+      Number.isFinite(speedMbps) && speedMbps >= 1 && speedMbps <= 100_000;
+    const safeSpeedMbps: number = speedInRange ? speedMbps : 800;
 
-    task.progress.transferSpeedMbps = speedMbps;
+    const totalBytes = task.progress.dataTotalGB * 1024 ** 3;
+    const bytesPerTick = ((safeSpeedMbps * 1_000_000) / 8) * (TICK_MS / 1000);
+
+    task.progress.transferSpeedMbps = safeSpeedMbps;
 
     EventBus.emit('fx:data_cable_visual', {
-      pulsesPerSecond: Math.round(speedMbps / 50),
+      pulsesPerSecond: Math.round(safeSpeedMbps / 50),
       cableColor: '#0088FF',
-      cableThickness: Math.min(0.2, 0.05 + speedMbps / 20000),
-      particleCount: Math.min(200, Math.round(speedMbps / 10)),
+      cableThickness: Math.min(0.2, 0.05 + safeSpeedMbps / 20000),
+      particleCount: Math.min(200, Math.round(safeSpeedMbps / 10)),
     });
 
     const tick = (): void => {
@@ -102,13 +114,14 @@ export class DataSyncPhase {
         (task.progress.dataTransferredGB / task.progress.dataTotalGB) * 100,
       );
       const remainBytes = totalBytes - transferredBytes;
-      task.progress.etaSeconds = Math.max(0, remainBytes / ((speedMbps * 1_000_000) / 8));
+      task.progress.etaSeconds = Math.max(0, remainBytes / ((safeSpeedMbps * 1_000_000) / 8));
       EventBus.emit('migration:progress', { taskId: task.id, progress: task.progress });
 
       if (task.progress.fullSyncPercent >= 100) this.stop();
     };
 
-    this.handle = setInterval(tick, tickMs);
+    // tick 周期为模块常量，不受调用方控制，避免 js/resource-exhaustion。
+    this.handle = setInterval(tick, TICK_MS);
     // Allow process to exit even if this interval is pending (avoid hanging tests).
     this.handle.unref?.();
   }
