@@ -1,0 +1,21 @@
+{
+  "name": "smartx-fps-client",
+  "private": true,
+  "version": "0.1.0",
+  "description": "《数据中心攻坚战》FPS × SmartX 迁移 — 客户端",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "three": "^0.160.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.160.0",
+    "typescript": "^5.4.5",
+    "vite": "^5.2.0"
+  }
+}
