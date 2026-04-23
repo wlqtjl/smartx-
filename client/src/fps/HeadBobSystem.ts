@@ -5,6 +5,8 @@
 import * as THREE from 'three';
 import type { PlayerController } from './PlayerController';
 
+const TWO_PI = Math.PI * 2;
+
 export class HeadBobSystem {
   private phase = 0;
   private lastOffsetY = 0;
@@ -24,7 +26,7 @@ export class HeadBobSystem {
         : config.headBobAmplitude.walk;
 
     // 只有在移动时推进相位
-    if (moving) this.phase += dt * freq * Math.PI * 2;
+    if (moving) this.phase += dt * freq * TWO_PI;
 
     const targetY = moving ? Math.sin(this.phase) * amp : 0;
     const targetX = moving ? Math.cos(this.phase * 0.5) * amp * 0.5 : 0;

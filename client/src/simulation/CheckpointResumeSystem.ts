@@ -30,6 +30,9 @@ export interface MigrationCheckpoint {
 export type ResumeStrategy = 'FROM_CHECKPOINT' | 'RESTART_INCREMENTAL' | 'FULL_RESTART';
 
 const BLOCK_SIZE_BYTES = 4 * 1024 * 1024; // 4MB/块
+const BLOCK_SIZE_MB = 4;
+/** 演示用固定估算速率（MB/s），用于计算续传节省时间 */
+const EXPECTED_TRANSFER_SPEED_MBPS = 800;
 
 export class CheckpointResumeSystem {
   private checkpoints: Map<string, MigrationCheckpoint[]> = new Map();
@@ -78,8 +81,9 @@ export class CheckpointResumeSystem {
       checkpoint.totalBlocks === 0
         ? 0
         : checkpoint.transferredBlocks.length / checkpoint.totalBlocks;
-    // 按 800MB/s 计算
-    const totalEstimatedMinutes = (checkpoint.totalBlocks * 4) / 1024 / 800 * 60;
+    // 按固定估算速率计算
+    const totalEstimatedMinutes =
+      (checkpoint.totalBlocks * BLOCK_SIZE_MB) / 1024 / EXPECTED_TRANSFER_SPEED_MBPS * 60;
     return {
       savedPercent: Math.round(progress * 100),
       savedMinutes: Math.round(progress * totalEstimatedMinutes),

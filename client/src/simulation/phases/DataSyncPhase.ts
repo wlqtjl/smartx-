@@ -127,18 +127,17 @@ export class DataSyncPhase {
     EventBus.emit('fx:data_cable_visual', visual);
 
     const tick = (): void => {
-      const task2 = task;
-      if (task2.state === 'PAUSED_NETWORK_FAULT' || task2.state === 'PAUSED_STORAGE_FAULT') return;
+      if (task.state === 'PAUSED_NETWORK_FAULT' || task.state === 'PAUSED_STORAGE_FAULT') return;
 
-      const transferredBytes = task2.progress.dataTransferredGB * 1024 ** 3 + bytesPerTick;
-      task2.progress.dataTransferredGB = Math.min(totalBytes, transferredBytes) / 1024 ** 3;
-      task2.progress.fullSyncPercent = Math.min(
+      const transferredBytes = task.progress.dataTransferredGB * 1024 ** 3 + bytesPerTick;
+      task.progress.dataTransferredGB = Math.min(totalBytes, transferredBytes) / 1024 ** 3;
+      task.progress.fullSyncPercent = Math.min(
         100,
-        (task2.progress.dataTransferredGB / task2.progress.dataTotalGB) * 100,
+        (task.progress.dataTransferredGB / task.progress.dataTotalGB) * 100,
       );
       const remainBytes = totalBytes - transferredBytes;
-      task2.progress.etaSeconds = Math.max(0, remainBytes / ((speedMbps * 1_000_000) / 8));
-      EventBus.emit('migration:progress', { taskId: task2.id, progress: task2.progress });
+      task.progress.etaSeconds = Math.max(0, remainBytes / ((speedMbps * 1_000_000) / 8));
+      EventBus.emit('migration:progress', { taskId: task.id, progress: task.progress });
     };
 
     this.tickHandle = window.setInterval(tick, tickMs);

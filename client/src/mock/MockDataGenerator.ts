@@ -18,11 +18,17 @@ const GUEST_OS: GuestOSType[] = [
   'ubuntu_22',
 ];
 
-const randomMac = (): string =>
-  '00:50:56:' +
-  [0, 0, 0]
-    .map(() => Math.floor(Math.random() * 256).toString(16).padStart(2, '0'))
-    .join(':');
+/**
+ * 生成演示用 MAC 地址。
+ * 注意：仅用于界面展示的 mock 数据（非安全上下文），因此使用确定性计数器，
+ * 避免引入非密码安全的 Math.random() 调用。
+ */
+let macCounter = 0;
+const demoMac = (): string => {
+  const n = macCounter++;
+  const hex = (v: number): string => v.toString(16).padStart(2, '0');
+  return `00:50:56:${hex((n >> 16) & 0xff)}:${hex((n >> 8) & 0xff)}:${hex(n & 0xff)}`;
+};
 
 export const MockDataGenerator = {
   async generateESXiEnvironment(_cred: VCenterCredential): Promise<ESXiScanResult> {
@@ -79,7 +85,7 @@ export const MockDataGenerator = {
       nics: [
         {
           label: 'Network adapter 1',
-          macAddress: randomMac(),
+          macAddress: demoMac(),
           networkName: i === 0 ? 'DB Network' : 'VM Network',
           adapterType: i % 2 === 0 ? 'vmxnet3' : 'e1000',
         },

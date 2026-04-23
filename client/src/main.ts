@@ -104,9 +104,6 @@ function setupInput(domElement: HTMLElement): {
   domElement.addEventListener('click', () => {
     domElement.requestPointerLock?.();
   });
-  document.addEventListener('pointerlockchange', () => {
-    // 无操作：仅启用 movementX/Y 回调路径
-  });
   document.addEventListener('mousemove', (e) => {
     if (document.pointerLockElement === domElement) {
       mouseDX += e.movementX ?? 0;
@@ -254,8 +251,12 @@ async function runMigrationScript(
   fsm.transition(task.id, 'FULL_SYNC');
   const sync = new DataSyncPhase();
   sync.start(task, 1000, 200);
-  // 每 60s 保存断点
-  const checkpointTimer = window.setInterval(() => checkpoints.saveCheckpoint(task), 60_000);
+  // 每 CHECKPOINT_INTERVAL_MS 保存断点
+  const CHECKPOINT_INTERVAL_MS = 60_000;
+  const checkpointTimer = window.setInterval(
+    () => checkpoints.saveCheckpoint(task),
+    CHECKPOINT_INTERVAL_MS,
+  );
   await new Promise<void>((resolve) => {
     const sub = EventBus.on('migration:progress', ({ progress }) => {
       if (progress.fullSyncPercent >= 90) {

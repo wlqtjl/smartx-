@@ -82,6 +82,9 @@ export const STORAGE_MAPPING_RULES: StorageMappingRule[] = [
   },
 ];
 
+/** 存储层级优先级：NVMe > SSD > HDD（数字越大性能越高） */
+export const STORAGE_TIER_PRIORITY = { nvme: 3, ssd: 2, hdd: 1 } as const;
+
 export const checkStorageMismatch = (
   vm: DiscoveredVM & { workloadType: VMWorkloadType },
   pool: StoragePool,
@@ -89,8 +92,7 @@ export const checkStorageMismatch = (
   const rule = STORAGE_MAPPING_RULES.find((r) => r.vmWorkloadType === vm.workloadType);
   if (!rule) return null;
 
-  const tierOrder = { nvme: 3, ssd: 2, hdd: 1 } as const;
-  if (tierOrder[pool.tier] < tierOrder[rule.recommendedTier]) {
+  if (STORAGE_TIER_PRIORITY[pool.tier] < STORAGE_TIER_PRIORITY[rule.recommendedTier]) {
     if (vm.workloadType === 'DATABASE' && pool.tier === 'hdd') {
       return {
         type: 'PERFORMANCE_DOWNGRADE',

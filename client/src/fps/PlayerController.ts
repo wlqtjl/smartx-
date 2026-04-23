@@ -78,6 +78,9 @@ export class PlayerController {
   private readonly interactionRaycaster: THREE.Raycaster;
   private readonly interactionTargets: THREE.Object3D[] = [];
 
+  // 重力加速度（m/s²），负值向下
+  private static readonly GRAVITY = -18;
+
   // 冲刺消耗：体力 / 秒；冲刺冷却恢复：体力 / 秒
   private readonly staminaDrainPerSec = 25;
   private readonly staminaRegenPerSec = 15;
@@ -155,8 +158,7 @@ export class PlayerController {
     state.velocity.z = dir.z * speed;
 
     // 重力 / 跳跃
-    const gravity = -18;
-    if (!state.isGrounded) state.velocity.y += gravity * dt;
+    if (!state.isGrounded) state.velocity.y += PlayerController.GRAVITY * dt;
     if (input.jump && state.isGrounded) {
       state.velocity.y = 5.5;
       state.isGrounded = false;
