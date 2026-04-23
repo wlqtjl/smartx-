@@ -5,6 +5,8 @@
 import * as THREE from 'three';
 import { EventBus } from './core/EventBus';
 import { CLOUDTOWER_THEME } from './theme/cloudtower.theme';
+import { apiClient } from './net/apiClient';
+import { socketClient } from './net/socketClient';
 import { CollisionSystem } from './fps/CollisionSystem';
 import { PlayerController, type InputState } from './fps/PlayerController';
 import { HeadBobSystem } from './fps/HeadBobSystem';
@@ -331,6 +333,21 @@ async function bootstrap(): Promise<void> {
   EventBus.on('migration:stateChange', ({ prev, next }) => {
     console.log(`[FSM] ${prev} → ${next}`);
   });
+
+  // 尝试与服务端会话建立（可选：未配置 VITE_SMARTX_API 时会静默失败）
+  if (apiClient.hasBackend()) {
+    try {
+      await apiClient.login('Player');
+      socketClient.connect();
+      // 订阅所有任务事件（演示场景下广播即可）
+      EventBus.on('migration:created', ({ task }: { task: { id: string } }) => {
+        socketClient.subscribe(task.id);
+      });
+      console.log('[SmartX] backend session established:', apiClient.getBaseUrl());
+    } catch (err) {
+      console.warn('[SmartX] backend unavailable, falling back to local sim:', err);
+    }
+  }
 
   const { getInput } = setupInput(renderer.domElement);
 
