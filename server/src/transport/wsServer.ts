@@ -141,6 +141,7 @@ export const attachWebSocket = (
       switch (msg.type) {
         case 'subscribe':
           if (meta.subscriptions.size >= config.wsMaxSubscriptions) {
+            // Safe to echo taskId: validated by `wsClientMessage` schema (trimmed, 1..128 chars).
             send(ws, {
               type: 'error',
               message: `subscription limit reached (cap=${config.wsMaxSubscriptions}, rejected taskId=${msg.taskId})`,

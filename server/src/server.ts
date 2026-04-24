@@ -130,6 +130,14 @@ export const createServer = async (opts: ServerOptions = {}): Promise<SmartXServ
   // Optional static serving of the built client (same-origin deployments).
   if (config.staticRoot) {
     const staticDir = path.resolve(config.staticRoot);
+    // Cap SPA-fallback traffic to avoid arbitrary-path filesystem churn.
+    const staticLimiter = rateLimit({
+      windowMs: 60_000,
+      limit: 600,
+      standardHeaders: 'draft-7',
+      legacyHeaders: false,
+    });
+    app.use(staticLimiter);
     app.use(express.static(staticDir, { index: false, maxAge: '1h' }));
     app.get('*', (req, res, next) => {
       if (req.path.startsWith('/api') || req.path.startsWith('/ws')) return next();

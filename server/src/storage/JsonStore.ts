@@ -95,7 +95,10 @@ export class JsonStore {
 
   async saveNow(): Promise<void> {
     if (this.readOnly) {
-      log.warn('state.save.skipped.readonly', { path: this.filePath });
+      log.warn('state.save.skipped.readonly', {
+        path: this.filePath,
+        reason: 'persisted snapshot schemaVersion is newer than the running code; refusing to overwrite. Upgrade the deployment or restore from an older backup.',
+      });
       return;
     }
     const data: Snapshot = {
