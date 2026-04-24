@@ -24,12 +24,18 @@ npm run build
 
 ## 环境变量
 
+完整列表见仓库根目录 [`.env.example`](../.env.example)。最常用：
+
 | 变量名 | 默认值 | 说明 |
 |---|---|---|
 | `SMARTX_PORT` | `8787` | HTTP/WS 监听端口 |
 | `SMARTX_HOST` | `0.0.0.0` | 绑定地址 |
 | `SMARTX_DATA_PATH` | `data/state.json` | 持久化文件（JSON） |
-| `SMARTX_ALLOWED_ORIGINS` | *（全放行）* | CORS 白名单，逗号分隔 |
+| `SMARTX_ALLOWED_ORIGINS` | *（dev 全放行 / prod 必填）* | CORS 白名单，逗号分隔。`NODE_ENV=production` 时为空会拒绝启动。 |
+| `SMARTX_WS_ALLOWED_ORIGINS` | *（同上 CORS 列表）* | WebSocket Origin 白名单 |
+| `SMARTX_RATE_LIMIT_PER_MIN` | `60` | 每 token/IP 每分钟请求上限 |
+| `SMARTX_WS_MAX_SUBSCRIPTIONS` | `16` | 每 WS 连接订阅任务数上限 |
+| `SMARTX_STATIC_ROOT` | *(空)* | 若设置，在 `/` 伺服该目录的 SPA 构建产物 |
 | `LOG_LEVEL` | `info` | `debug`/`info`/`warn`/`error` |
 
 ## 架构总览

@@ -1,24 +1,43 @@
 /**
  * REST 路由：涵盖会话、扫描、兼容性、网络/存储映射、同步、驱动注入、切换、验证、断点、评分。
  * 所有写操作要求 X-Session-Token header（由 /api/auth/session 创建）。
+ *
+ * 输入校验统一通过 `validation.ts` 的 zod schema 完成；路由内只处理业务逻辑。
  */
 import { Router, type Request, type Response, type NextFunction } from 'express';
+import rateLimit, { type RateLimitRequestHandler } from 'express-rate-limit';
 import type { AppContainer } from '../container.js';
 import {
   IllegalTransitionError,
   MigrationStateMachine,
   TaskNotFoundError,
 } from '../simulation/MigrationStateMachine.js';
-import { validateCredential } from '../simulation/phases/EnvScanPhase.js';
 import { NetworkMappingPhase } from '../simulation/phases/NetworkMappingPhase.js';
 import { StorageMappingPhase } from '../simulation/phases/StorageMappingPhase.js';
 import { DataSyncPhase } from '../simulation/phases/DataSyncPhase.js';
-import { SCORING_RULES, type ScoringRuleKey } from '@shared/index';
+import type { ScoringRuleKey } from '@shared/index';
 import { log } from '../core/logger.js';
-
-const MAX_DATA_TOTAL_GB = 65536;
+import type { AppConfig } from '../core/config.js';
+import {
+  authSessionBody,
+  credentialBody,
+  compatBody,
+  createTaskBody,
+  transitionBody,
+  networkMappingBody,
+  storageMappingBody,
+  syncStartBody,
+  driverInjectionBody,
+  scoreApplyBody,
+  validateBody,
+} from './validation.js';
 
 const asError = (code: number, message: string) => ({ error: { code, message } });
+
+interface WithValid<T> extends Request {
+  validBody: T;
+  session?: { token: string };
+}
 
 const requireSession =
   (app: AppContainer) =>
@@ -39,17 +58,38 @@ const wrap =
     Promise.resolve(fn(req, res)).catch(next);
   };
 
-export const createApiRouter = (app: AppContainer): Router => {
+/** Build a rate limiter keyed by session token (falls back to IP). */
+const makeLimiter = (perMin: number, windowMs = 60_000): RateLimitRequestHandler =>
+  rateLimit({
+    windowMs,
+    limit: perMin,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    keyGenerator: (req) => req.header('x-session-token') ?? req.ip ?? 'unknown',
+    handler: (_req, res) => {
+      res.status(429).json(asError(429, 'rate limit exceeded, slow down'));
+    },
+  });
+
+export const createApiRouter = (app: AppContainer, config: AppConfig): Router => {
   const r = Router();
+
+  // Auth endpoints get a stricter limit to deter brute force.
+  const authLimiter = makeLimiter(Math.min(10, config.rateLimitPerMin));
+  // Expensive operations (scans, sync start, cutover) share one bucket.
+  const heavyLimiter = makeLimiter(Math.max(5, Math.floor(config.rateLimitPerMin / 2)));
+  // Generic writes fall back to the configured per-minute quota.
+  const writeLimiter = makeLimiter(config.rateLimitPerMin);
 
   // ------------ Auth ------------
   r.post(
     '/auth/session',
+    authLimiter,
+    validateBody(authSessionBody),
     wrap((req, res) => {
-      const body = (req.body ?? {}) as { playerName?: unknown };
-      const playerName = typeof body.playerName === 'string' && body.playerName.trim().length > 0
-        ? body.playerName.trim()
-        : 'Anonymous';
+      const body = (req as WithValid<{ playerName?: string }>).validBody;
+      const playerName =
+        body.playerName && body.playerName.length > 0 ? body.playerName : 'Anonymous';
       const session = app.sessions.create(playerName);
       res.status(201).json(session);
     }),
@@ -68,15 +108,12 @@ export const createApiRouter = (app: AppContainer): Router => {
   // ------------ Environment scan ------------
   r.post(
     '/environment/scan',
+    heavyLimiter,
     requireSession(app),
+    validateBody(credentialBody),
     wrap(async (req, res) => {
-      const cred = req.body;
-      const err = validateCredential(cred);
-      if (err) {
-        res.status(400).json(asError(400, err));
-        return;
-      }
-      const result = await app.envScan.execute(cred);
+      const cred = (req as WithValid<Record<string, unknown>>).validBody;
+      const result = await app.envScan.execute(cred as never);
       res.json(result);
     }),
   );
@@ -84,13 +121,11 @@ export const createApiRouter = (app: AppContainer): Router => {
   // ------------ Compatibility ------------
   r.post(
     '/compatibility/check',
+    writeLimiter,
     requireSession(app),
+    validateBody(compatBody),
     wrap(async (req, res) => {
-      const body = (req.body ?? {}) as { vms?: unknown };
-      if (!Array.isArray(body.vms)) {
-        res.status(400).json(asError(400, 'vms[] required'));
-        return;
-      }
+      const body = (req as WithValid<{ vms: unknown[] }>).validBody;
       const report = await app.compat.execute(body.vms as never);
       res.json(report);
     }),
@@ -107,26 +142,14 @@ export const createApiRouter = (app: AppContainer): Router => {
 
   r.post(
     '/migration/tasks',
+    writeLimiter,
     requireSession(app),
+    validateBody(createTaskBody),
     wrap((req, res) => {
-      const body = (req.body ?? {}) as { vmId?: unknown; vmName?: unknown; dataTotalGB?: unknown };
-      const vmId = typeof body.vmId === 'string' ? body.vmId.trim() : '';
-      const vmName = typeof body.vmName === 'string' ? body.vmName.trim() : '';
-      const dataTotalGB = typeof body.dataTotalGB === 'number' ? body.dataTotalGB : NaN;
-      if (!vmId || !vmName) {
-        res.status(400).json(asError(400, 'vmId and vmName required'));
-        return;
-      }
-      if (
-        !Number.isFinite(dataTotalGB) ||
-        dataTotalGB <= 0 ||
-        dataTotalGB > MAX_DATA_TOTAL_GB
-      ) {
-        res.status(400).json(asError(400, `dataTotalGB must be in (0, ${MAX_DATA_TOTAL_GB}]`));
-        return;
-      }
+      const body = (req as WithValid<{ vmId: string; vmName: string; dataTotalGB: number }>)
+        .validBody;
       const { session } = req as Request & { session: { token: string } };
-      const task = app.fsm.createTask(vmId, vmName, dataTotalGB, session.token);
+      const task = app.fsm.createTask(body.vmId, body.vmName, body.dataTotalGB, session.token);
       res.status(201).json(task);
     }),
   );
@@ -146,19 +169,17 @@ export const createApiRouter = (app: AppContainer): Router => {
 
   r.post(
     '/migration/tasks/:id/transition',
+    writeLimiter,
     requireSession(app),
+    validateBody(transitionBody),
     wrap((req, res) => {
-      const body = (req.body ?? {}) as { state?: unknown; note?: unknown };
-      if (typeof body.state !== 'string') {
-        res.status(400).json(asError(400, 'state required'));
-        return;
-      }
+      const body = (req as WithValid<{ state: string; note?: string }>).validBody;
       const task = app.fsm.transition(
         req.params.id,
         body.state as never,
         undefined,
         'player',
-        typeof body.note === 'string' ? body.note : undefined,
+        body.note,
       );
       res.json(task);
     }),
@@ -167,23 +188,19 @@ export const createApiRouter = (app: AppContainer): Router => {
   // ------------ Network mapping ------------
   r.post(
     '/migration/tasks/:id/network-mapping',
+    writeLimiter,
     requireSession(app),
+    validateBody(networkMappingBody),
     wrap((req, res) => {
       const task = app.fsm.requireTask(req.params.id);
-      const body = (req.body ?? {}) as {
-        sources?: unknown;
-        targets?: unknown;
-        sourceId?: unknown;
-        targetId?: unknown;
-      };
-      if (!Array.isArray(body.sources) || !Array.isArray(body.targets)) {
-        res.status(400).json(asError(400, 'sources[] and targets[] required'));
-        return;
-      }
-      if (typeof body.sourceId !== 'string' || typeof body.targetId !== 'string') {
-        res.status(400).json(asError(400, 'sourceId/targetId required'));
-        return;
-      }
+      const body = (
+        req as WithValid<{
+          sources: unknown[];
+          targets: unknown[];
+          sourceId: string;
+          targetId: string;
+        }>
+      ).validBody;
       let phase = app.networkMappings.get(task.id);
       if (!phase) {
         phase = new NetworkMappingPhase(body.sources as never, body.targets as never);
@@ -191,7 +208,9 @@ export const createApiRouter = (app: AppContainer): Router => {
       }
       const result = phase.attemptMapping(body.sourceId, body.targetId);
       if (!result.ok) {
-        res.status(400).json({ ...asError(400, result.error ?? 'mapping failed'), warning: result.warning });
+        res
+          .status(400)
+          .json({ ...asError(400, result.error ?? 'mapping failed'), warning: result.warning });
         return;
       }
       task.networkMapping = result.mapping ?? task.networkMapping;
@@ -207,29 +226,25 @@ export const createApiRouter = (app: AppContainer): Router => {
   // ------------ Storage mapping ------------
   r.post(
     '/migration/tasks/:id/storage-mapping',
+    writeLimiter,
     requireSession(app),
+    validateBody(storageMappingBody),
     wrap((req, res) => {
       const task = app.fsm.requireTask(req.params.id);
-      const body = (req.body ?? {}) as {
-        pools?: unknown;
-        vm?: unknown;
-        poolId?: unknown;
-        options?: unknown;
-      };
-      if (!Array.isArray(body.pools) || typeof body.poolId !== 'string' || !body.vm) {
-        res.status(400).json(asError(400, 'pools[], poolId and vm required'));
-        return;
-      }
+      const body = (
+        req as WithValid<{
+          pools: unknown[];
+          vm: unknown;
+          poolId: string;
+          options?: Record<string, boolean>;
+        }>
+      ).validBody;
       let phase = app.storageMappings.get(task.id);
       if (!phase) {
         phase = new StorageMappingPhase(body.pools as never);
         app.storageMappings.set(task.id, phase);
       }
-      const { mapping, warning } = phase.assign(
-        body.vm as never,
-        body.poolId,
-        (body.options as Record<string, boolean> | undefined) ?? {},
-      );
+      const { mapping, warning } = phase.assign(body.vm as never, body.poolId, body.options ?? {});
       task.storageMapping = mapping;
       task.storageWarning = warning;
       res.json({ mapping, warning });
@@ -239,13 +254,16 @@ export const createApiRouter = (app: AppContainer): Router => {
   // ------------ Data sync ------------
   r.post(
     '/migration/tasks/:id/sync/start',
+    heavyLimiter,
     requireSession(app),
+    validateBody(syncStartBody),
     wrap((req, res) => {
       const task = app.fsm.requireTask(req.params.id);
-      const body = (req.body ?? {}) as { speedMbps?: unknown };
-      const speedMbps = typeof body.speedMbps === 'number' && body.speedMbps > 0
-        ? Math.min(100_000, body.speedMbps)
-        : 800;
+      const body = (req as WithValid<{ speedMbps?: number }>).validBody;
+      const speedMbps =
+        typeof body.speedMbps === 'number' && body.speedMbps > 0
+          ? Math.min(100_000, body.speedMbps)
+          : 800;
       let phase = app.dataSyncs.get(task.id);
       if (!phase) {
         phase = new DataSyncPhase();
@@ -258,6 +276,7 @@ export const createApiRouter = (app: AppContainer): Router => {
 
   r.post(
     '/migration/tasks/:id/sync/stop',
+    writeLimiter,
     requireSession(app),
     wrap((req, res) => {
       const phase = app.dataSyncs.get(req.params.id);
@@ -268,6 +287,7 @@ export const createApiRouter = (app: AppContainer): Router => {
 
   r.post(
     '/migration/tasks/:id/sync/incremental',
+    heavyLimiter,
     requireSession(app),
     wrap(async (req, res) => {
       const task = app.fsm.requireTask(req.params.id);
@@ -284,11 +304,13 @@ export const createApiRouter = (app: AppContainer): Router => {
   // ------------ Driver injection ------------
   r.post(
     '/migration/tasks/:id/driver-injection',
+    heavyLimiter,
     requireSession(app),
+    validateBody(driverInjectionBody),
     wrap(async (req, res) => {
       const task = app.fsm.requireTask(req.params.id);
-      const body = (req.body ?? {}) as { guestOS?: unknown };
-      const guestOS = typeof body.guestOS === 'string' ? body.guestOS : task.driverStatus.guestOS;
+      const body = (req as WithValid<{ guestOS?: string }>).validBody;
+      const guestOS = body.guestOS ?? task.driverStatus.guestOS;
       const plan = app.driverInjection.planFor(guestOS as never, task.vmId);
       const status = await app.driverInjection.execute(task, plan);
       res.json({ plan, status });
@@ -298,6 +320,7 @@ export const createApiRouter = (app: AppContainer): Router => {
   // ------------ Cutover ------------
   r.post(
     '/migration/tasks/:id/cutover',
+    heavyLimiter,
     requireSession(app),
     wrap(async (req, res) => {
       const task = app.fsm.requireTask(req.params.id);
@@ -309,6 +332,7 @@ export const createApiRouter = (app: AppContainer): Router => {
   // ------------ Post-check ------------
   r.post(
     '/migration/tasks/:id/post-check',
+    heavyLimiter,
     requireSession(app),
     wrap(async (_req, res) => {
       const items = await app.postCheck.runAuto();
@@ -327,6 +351,7 @@ export const createApiRouter = (app: AppContainer): Router => {
 
   r.post(
     '/migration/tasks/:id/checkpoints',
+    writeLimiter,
     requireSession(app),
     wrap((req, res) => {
       const task = app.fsm.requireTask(req.params.id);
@@ -337,6 +362,7 @@ export const createApiRouter = (app: AppContainer): Router => {
 
   r.post(
     '/migration/tasks/:id/resume',
+    writeLimiter,
     requireSession(app),
     wrap((req, res) => {
       const task = app.fsm.requireTask(req.params.id);
@@ -362,18 +388,13 @@ export const createApiRouter = (app: AppContainer): Router => {
 
   r.post(
     '/migration/tasks/:id/score/apply',
+    writeLimiter,
     requireSession(app),
+    validateBody(scoreApplyBody),
     wrap((req, res) => {
       app.fsm.requireTask(req.params.id); // ensure exists
-      const body = (req.body ?? {}) as { rule?: unknown; examples?: unknown };
-      if (typeof body.rule !== 'string' || !(body.rule in SCORING_RULES)) {
-        res.status(400).json(asError(400, 'unknown scoring rule'));
-        return;
-      }
-      const examples = Array.isArray(body.examples)
-        ? body.examples.filter((x): x is string => typeof x === 'string')
-        : undefined;
-      app.scoring.for(req.params.id).apply(body.rule as ScoringRuleKey, examples);
+      const body = (req as WithValid<{ rule: string; examples?: string[] }>).validBody;
+      app.scoring.for(req.params.id).apply(body.rule as ScoringRuleKey, body.examples);
       res.json(app.scoring.for(req.params.id).finalize());
     }),
   );
