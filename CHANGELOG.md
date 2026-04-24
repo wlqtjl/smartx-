@@ -5,6 +5,14 @@
 ## [Unreleased]
 
 ### Added
+- **PR #2 — 持久化适配层**：新增 `Store` 接口 + SQLite（`better-sqlite3`，WAL）+ Postgres（`pg`，连接池 + `pg_advisory_lock`）两套后端；默认仍为 JSON 以保证开发体验。
+  - 环境变量：`SMARTX_STORE=json|sqlite|postgres`、`DATABASE_URL`、`SMARTX_SQLITE_PATH`、`SMARTX_DB_POOL_MAX`、`SMARTX_ALLOW_JSON_IN_PROD`。
+  - SQL 迁移：`server/src/storage/migrations/0001_init.{up,down}.sql`，版本化记录在 `schema_meta` 表。
+  - npm 脚本：`db:migrate` / `db:migrate:down` / `db:status` / `db:seed` / `import:json`。
+  - `docker-compose.yml` 新增 `postgres` profile（启用：`docker compose --profile postgres up`）。
+  - `/health` 扩展 `store.{kind,latencyMs,migrationsApplied}`；`schemaVersion` 现从 DB 读取。
+  - 文档：`docs/persistence.md`。
+  - 生产环境默认**拒绝** `SMARTX_STORE=json`，需显式 `SMARTX_ALLOW_JSON_IN_PROD=1` 才能降级（`docker-compose.yml` 为默认兼容保留此开关）。
 - 生产化基线：Docker 镜像、`docker-compose.yml`、`.env.example`。
 - 服务端速率限制（`express-rate-limit`）覆盖登录与昂贵写入端点。
 - 服务端请求级结构化日志（request-id）+ HTTP 访问日志。
@@ -26,7 +34,6 @@
 
 ### Deferred（列入下一个 milestone）
 - 真实身份认证（SSO / OIDC / JWT 或密码）。
-- SQLite / Postgres 持久化适配器。
 - Sentry 前端错误上报。
 - Playwright E2E。
 - 前端 i18n 框架、a11y 完整化。

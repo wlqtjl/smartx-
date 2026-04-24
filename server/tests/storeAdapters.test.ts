@@ -253,3 +253,43 @@ for (const [name, factory] of adapters) {
     }
   });
 }
+
+// ──────────────────────────────────────────────────────────────────────────
+// Postgres-only concurrency smoke test — `DATABASE_URL` required.
+// Writes 100 rows in parallel to verify pool saturation + no deadlocks.
+// ──────────────────────────────────────────────────────────────────────────
+if (process.env.DATABASE_URL) {
+  test('postgres: 100 parallel user upserts complete without deadlock', async () => {
+    const { PostgresStore } = await import('../src/storage/PostgresStore.js');
+    const store = new PostgresStore({
+      connectionString: process.env.DATABASE_URL!,
+      max: 10,
+    });
+    try {
+      await store.migrate();
+      await store.rollbackLatest();
+      await store.migrate();
+      const t0 = Date.now();
+      const ops = Array.from({ length: 100 }, (_, i) =>
+        store.users.upsert({
+          id: `concurrent-${i}`,
+          login: `concurrent-${i}`,
+          passwordHash: null,
+          oidcSubject: null,
+          roles: ['operator'],
+          createdAt: Date.now(),
+          disabledAt: null,
+        }),
+      );
+      await Promise.all(ops);
+      const elapsed = Date.now() - t0;
+      const all = await store.users.list({ limit: 1000 });
+      assert.equal(all.length, 100, `expected 100 rows, got ${all.length}`);
+      // soft perf budget — 100 writes through a pool of 10 should be quick
+      assert.ok(elapsed < 10_000, `took ${elapsed}ms (pool saturation suspected)`);
+    } finally {
+      await store.rollbackLatest();
+      await store.close();
+    }
+  });
+}
