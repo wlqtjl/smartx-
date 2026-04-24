@@ -39,9 +39,37 @@ interface WithValid<T> extends Request {
   session?: { token: string };
 }
 
+/**
+ * PR #1: authentication gate. Accepts either
+ *   - `Authorization: Bearer <JWT>` (real identity via `AuthService`), or
+ *   - legacy `x-session-token` (in-memory guest session).
+ *
+ * On success, populates `req.session = { token }` for downstream owner-check code
+ * (the rest of the router uses `session.token` as an opaque principal id).
+ */
 const requireSession =
   (app: AppContainer) =>
-  (req: Request, res: Response, next: NextFunction): void => {
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    // Prefer Bearer JWT when AuthService is configured.
+    const authHeader = req.header('authorization');
+    const bearer = authHeader ? /^Bearer\s+(.+)$/i.exec(authHeader.trim())?.[1] : undefined;
+    if (bearer && app.auth) {
+      try {
+        const principal = await app.auth.verifyAccessToken(bearer);
+        // Use `userId` as the stable owner key so JWT-authenticated callers map onto
+        // the same owner regardless of sid rotation.
+        (req as Request & { session: { token: string; kind: 'jwt' } }).session = {
+          token: principal.id,
+          kind: 'jwt',
+        };
+        next();
+        return;
+      } catch {
+        res.status(401).json(asError(401, 'invalid or expired access token'));
+        return;
+      }
+    }
+    // Fallback: legacy guest token.
     const token = req.header('x-session-token') ?? undefined;
     const session = app.sessions.get(token);
     if (!session) {
@@ -65,7 +93,15 @@ const makeLimiter = (perMin: number, windowMs = 60_000): RateLimitRequestHandler
     limit: perMin,
     standardHeaders: 'draft-7',
     legacyHeaders: false,
-    keyGenerator: (req) => req.header('x-session-token') ?? req.ip ?? 'unknown',
+    keyGenerator: (req) => {
+      // Prefer Bearer so JWT-authenticated traffic shares a per-user bucket.
+      const authHeader = req.header('authorization');
+      if (authHeader) {
+        const m = /^Bearer\s+(.+)$/i.exec(authHeader.trim());
+        if (m) return `bearer:${m[1]}`;
+      }
+      return req.header('x-session-token') ?? req.ip ?? 'unknown';
+    },
     handler: (_req, res) => {
       res.status(429).json(asError(429, 'rate limit exceeded, slow down'));
     },
@@ -87,6 +123,10 @@ export const createApiRouter = (app: AppContainer, config: AppConfig): Router =>
     authLimiter,
     validateBody(authSessionBody),
     wrap((req, res) => {
+      if (!config.auth.allowGuestLogin) {
+        res.status(403).json(asError(403, 'guest login disabled; use /api/auth/password/login or /api/auth/oidc/start'));
+        return;
+      }
       const body = (req as WithValid<{ playerName?: string }>).validBody;
       const playerName =
         body.playerName && body.playerName.length > 0 ? body.playerName : 'Anonymous';

@@ -26,6 +26,28 @@ export const authSessionBody = z
   })
   .strict();
 
+// PR #1: password register / login / refresh
+export const passwordRegisterBody = z
+  .object({
+    login: trimmed(128),
+    password: z.string().min(8).max(256),
+    roles: z.array(trimmed(64)).max(16).optional(),
+  })
+  .strict();
+
+export const passwordLoginBody = z
+  .object({
+    login: trimmed(128),
+    password: z.string().min(1).max(256),
+  })
+  .strict();
+
+export const refreshBody = z
+  .object({
+    refreshToken: z.string().min(10).max(8192),
+  })
+  .strict();
+
 // ---------- Env scan / credentials ----------
 export const credentialBody = z
   .object({

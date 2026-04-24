@@ -17,6 +17,10 @@ import { CutoverDirector } from './simulation/phases/CutoverPhase.js';
 import { PostCheckPhase } from './simulation/phases/PostCheckPhase.js';
 import { JsonStore } from './storage/JsonStore.js';
 import { createStore, type ManagedStore } from './storage/createStore.js';
+import { AuthService } from './auth/authService.js';
+import { JwtService } from './auth/jwtService.js';
+import { OidcService } from './auth/oidcService.js';
+import { log } from './core/logger.js';
 
 export interface AppContainer {
   eventBus: typeof EventBus;
@@ -34,6 +38,10 @@ export interface AppContainer {
   networkMappings: Map<string, NetworkMappingPhase>;
   storageMappings: Map<string, StorageMappingPhase>;
   dataSyncs: Map<string, DataSyncPhase>;
+  /** PR #1: real identity. `null` when no JWT secret configured (guest-only mode). */
+  auth: AuthService | null;
+  /** PR #1: OIDC client. `null` when OIDC block not configured. */
+  oidc: OidcService | null;
 }
 
 export interface CreateContainerOptions {
@@ -63,6 +71,30 @@ export const createAppContainer = async (
   EventBus.on('migration:created', () => storage.scheduleSave());
   EventBus.on('checkpoint:save', () => storage.scheduleSave());
 
+  // ── PR #1：真实身份服务 ────────────────────────────────────────────
+  let auth: AuthService | null = null;
+  let oidc: OidcService | null = null;
+  if (opts.config?.auth.jwtSecret) {
+    const jwt = new JwtService({
+      secret: opts.config.auth.jwtSecret,
+      issuer: opts.config.auth.jwtIssuer,
+      accessTtlSec: opts.config.auth.accessTtlSec,
+      refreshTtlSec: opts.config.auth.refreshTtlSec,
+    });
+    auth = new AuthService(storage, jwt);
+    log.info('auth.jwt.ready', { issuer: opts.config.auth.jwtIssuer });
+    if (opts.config.auth.oidc) {
+      try {
+        oidc = await OidcService.create(opts.config.auth.oidc);
+      } catch (err) {
+        log.error('auth.oidc.discovery-failed', {
+          error: String((err as Error).message ?? err),
+        });
+        throw err;
+      }
+    }
+  }
+
   return {
     eventBus: EventBus,
     sessions: sessionStore,
@@ -78,5 +110,7 @@ export const createAppContainer = async (
     networkMappings: new Map(),
     storageMappings: new Map(),
     dataSyncs: new Map(),
+    auth,
+    oidc,
   };
 };

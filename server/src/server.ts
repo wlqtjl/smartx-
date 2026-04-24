@@ -7,6 +7,7 @@ import express, { type Express, type Request, type Response } from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { createApiRouter } from './transport/restApi.js';
+import { createAuthRouter } from './transport/authRoutes.js';
 import { attachWebSocket, type WsHandle } from './transport/wsServer.js';
 import { createAppContainer, type AppContainer } from './container.js';
 import { log } from './core/logger.js';
@@ -52,6 +53,15 @@ const resolveConfig = (opts: ServerOptions): AppConfig => {
     staticRoot: undefined,
     logLevel: 'info',
     store: { kind: 'json', poolMax: 10 },
+    auth: {
+      jwtSecret: undefined,
+      jwtIssuer: 'smartx',
+      accessTtlSec: 900,
+      refreshTtlSec: 30 * 86_400,
+      allowGuestLogin: true,
+      allowSelfRegister: true,
+      oidc: null,
+    },
   };
 };
 
@@ -135,6 +145,11 @@ export const createServer = async (opts: ServerOptions = {}): Promise<SmartXServ
   });
 
   app.use('/api', createApiRouter(container, config));
+  if (container.auth) {
+    // Mount PR #1 real-identity routes at /api/auth (password, refresh, logout, me, OIDC).
+    // Legacy guest `/api/auth/session` stays on the router above.
+    app.use('/api/auth', createAuthRouter(container, config));
+  }
 
   // Optional static serving of the built client (same-origin deployments).
   if (config.staticRoot) {

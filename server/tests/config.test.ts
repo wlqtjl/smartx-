@@ -39,6 +39,7 @@ test('config: production with allowed origins succeeds', () => {
     NODE_ENV: 'production',
     SMARTX_ALLOWED_ORIGINS: 'https://a.example',
     SMARTX_ALLOW_JSON_IN_PROD: '1',
+    SMARTX_ALLOW_GUEST_LOGIN: '1',
   } as NodeJS.ProcessEnv);
   assert.equal(c.nodeEnv, 'production');
 });
