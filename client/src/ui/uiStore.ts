@@ -209,7 +209,7 @@ class UiStoreImpl {
 
   // For tests only: reset to initial state
   _resetForTest(): void {
-    this.state = { ...initial, toast: [] };
+    this.state = { ...initial };
     this.listeners.clear();
   }
 }
