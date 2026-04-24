@@ -38,8 +38,43 @@ test('config: production with allowed origins succeeds', () => {
   const c = loadConfig({
     NODE_ENV: 'production',
     SMARTX_ALLOWED_ORIGINS: 'https://a.example',
+    SMARTX_ALLOW_JSON_IN_PROD: '1',
   } as NodeJS.ProcessEnv);
   assert.equal(c.nodeEnv, 'production');
+});
+
+test('config: production rejects SMARTX_STORE=json without explicit override', () => {
+  assert.throws(
+    () =>
+      loadConfig({
+        NODE_ENV: 'production',
+        SMARTX_ALLOWED_ORIGINS: 'https://a.example',
+      } as NodeJS.ProcessEnv),
+    /SMARTX_STORE=json is not allowed in production/,
+  );
+});
+
+test('config: SMARTX_STORE=postgres requires DATABASE_URL', () => {
+  assert.throws(
+    () =>
+      loadConfig({
+        SMARTX_STORE: 'postgres',
+      } as NodeJS.ProcessEnv),
+    /DATABASE_URL/,
+  );
+});
+
+test('config: store defaults to postgres when DATABASE_URL is set', () => {
+  const c = loadConfig({
+    DATABASE_URL: 'postgres://u:p@localhost/x',
+  } as NodeJS.ProcessEnv);
+  assert.equal(c.store.kind, 'postgres');
+  assert.equal(c.store.databaseUrl, 'postgres://u:p@localhost/x');
+});
+
+test('config: store defaults to json in dev', () => {
+  const c = loadConfig({} as NodeJS.ProcessEnv);
+  assert.equal(c.store.kind, 'json');
 });
 
 test('config: invalid port rejected', () => {

@@ -12,7 +12,7 @@ import { createAppContainer, type AppContainer } from './container.js';
 import { log } from './core/logger.js';
 import { requestId, accessLog } from './core/httpMiddleware.js';
 import type { AppConfig } from './core/config.js';
-import { STORAGE_SCHEMA_VERSION } from './storage/JsonStore.js';
+import { STORAGE_SCHEMA_VERSION } from './storage/Store.js';
 
 export interface SmartXServer {
   app: Express;
@@ -51,12 +51,13 @@ const resolveConfig = (opts: ServerOptions): AppConfig => {
     wsIdleTimeoutMs: 60_000,
     staticRoot: undefined,
     logLevel: 'info',
+    store: { kind: 'json', poolMax: 10 },
   };
 };
 
 export const createServer = async (opts: ServerOptions = {}): Promise<SmartXServer> => {
   const config = resolveConfig(opts);
-  const container = createAppContainer({ dataPath: config.dataPath });
+  const container = await createAppContainer({ dataPath: config.dataPath, config });
   await container.storage.load();
   container.sessions.startPurgeInterval();
 
@@ -89,15 +90,23 @@ export const createServer = async (opts: ServerOptions = {}): Promise<SmartXServ
   app.use('/metrics', probeLimiter);
 
   app.get('/health', async (_req: Request, res: Response) => {
-    const storageErr = await container.storage.checkWritable();
-    const ok = storageErr === null;
+    const [storageErr, storeHealth] = await Promise.all([
+      container.storage.checkWritable(),
+      container.storage.health(),
+    ]);
+    const ok = storageErr === null && storeHealth.ok;
     res.status(ok ? 200 : 503).json({
       ok,
       tasks: container.fsm.allTasks().length,
       sessions: container.sessions.size(),
       wsClients: wsHandleRef?.clientCount() ?? 0,
-      schemaVersion: STORAGE_SCHEMA_VERSION,
+      schemaVersion: storeHealth.schemaVersion || STORAGE_SCHEMA_VERSION,
       storageError: storageErr,
+      store: {
+        kind: container.storage.kind,
+        latencyMs: storeHealth.latencyMs,
+        migrationsApplied: storeHealth.migrationsApplied,
+      },
       uptime: process.uptime(),
     });
   });
