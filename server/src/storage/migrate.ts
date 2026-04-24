@@ -139,17 +139,6 @@ const upsertMeta = async (
   }
 };
 
-/**
- * 由于 SqlRunner 接口只暴露 queryOne，collectAll 用 Postgres/Sqlite 适配器各自提供。
- * 为了让 applyPending 在不知道后端的情况下仍可工作，这里定义一个 hook。
- * @deprecated SqlRunner.all() 已就位，无需全局注入。保留导出仅为向后兼容。
- */
-export const setCollectAll = (
-  _fn: <T>(dialect: MigrationDialect, sql: string, params?: unknown[]) => Promise<T[]>,
-): void => {
-  /* no-op */
-};
-
 /** 回滚最后一批迁移（supply ids 可选；不给则回滚全部）。 */
 export const rollbackApplied = async (
   dialect: MigrationDialect,

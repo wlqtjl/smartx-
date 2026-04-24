@@ -30,7 +30,14 @@ import {
   type SqlRunner,
 } from './migrate.js';
 
-/** 咨询锁 key（任意 64-bit 整数），避免 multi-instance 迁移冲突。 */
+/**
+ * 咨询锁 key —— 任意固定 64-bit 整数即可，值本身无语义，只需在本数据库内
+ * **唯一且稳定**，让多实例同时启动时彼此看到同一把锁。
+ *
+ * 取值来源：`crc32('smartx.migrations') = 913782401`（十进制）。
+ * 如与其他应用共享 Postgres 实例，请确认对方未使用同值（pg_advisory 锁空间
+ * 是全库共享的）。需要切换时同步更新常量即可，不会影响已落地的迁移记录。
+ */
 const MIGRATION_ADVISORY_LOCK_KEY = 913_782_401n;
 
 /** 把 `?` 占位符逐个转成 `$1,$2...`。 */

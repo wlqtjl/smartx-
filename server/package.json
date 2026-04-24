@@ -8,7 +8,7 @@
     "dev": "tsx watch src/index.ts",
     "start": "node dist/server/src/index.js",
     "start:tsx": "tsx src/index.ts",
-    "build": "tsc -p tsconfig.json && tsc-alias -p tsconfig.json --resolve-full-paths && node -e \"require('node:fs').cpSync('src/storage/migrations', 'dist/server/src/storage/migrations', { recursive: true });\"",
+    "build": "tsc -p tsconfig.json && tsc-alias -p tsconfig.json --resolve-full-paths && node scripts/copy-migrations.cjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "node --test --import tsx/esm tests/*.test.ts",
     "db:migrate": "tsx src/storage/dbCli.ts migrate",
