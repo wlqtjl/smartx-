@@ -1,6 +1,13 @@
 /**
- * 应用入口：演示级别的 3D 场景 + FPS 输入 + 迁移剧情编排。
- * 并非最终游戏关卡，仅为架构验证和手动试玩使用。
+ * 应用入口：Three.js 场景 + FPS 输入 + 事件驱动的迁移剧情 + React UI。
+ *
+ * 教程关玩法：
+ *  1. 玩家站在指挥台。走到"vCenter 控制台"，按 E。
+ *  2. UI 弹出登录面板 → 玩家提交 → 服务端/本地扫描 → 兼容性报告。
+ *  3. 玩家穿过走廊进入【网络间】，与网络控制台交互 → 完成网络映射。
+ *  4. 进入【存储间】，与存储控制台交互 → 完成存储映射。
+ *  5. 回到指挥台【切换控制台】，按 E 启动全量/增量同步、驱动注入、切换、验证。
+ *  6. 结算面板显示分数。
  */
 import * as THREE from 'three';
 import { EventBus } from './core/EventBus';
@@ -12,7 +19,7 @@ import { PlayerController, type InputState } from './fps/PlayerController';
 import { HeadBobSystem } from './fps/HeadBobSystem';
 import { ToolSystem } from './fps/ToolSystem';
 import { InteractionSystem } from './fps/InteractionSystem';
-import { MigrationStateMachine } from './simulation/MigrationStateMachine';
+import { MigrationStateMachine, type MigrationTask } from './simulation/MigrationStateMachine';
 import { EnvScanPhase } from './simulation/phases/EnvScanPhase';
 import { CompatibilityCheckPhase } from './simulation/phases/CompatibilityCheckPhase';
 import {
@@ -25,13 +32,18 @@ import {
   type StoragePool,
   type VMWorkloadType,
 } from './simulation/phases/StorageMappingPhase';
-import { DataSyncPhase } from './simulation/phases/DataSyncPhase';
+import { DataSyncPhase, SYNC_CHALLENGES } from './simulation/phases/DataSyncPhase';
 import { DriverInjectionPhase } from './simulation/phases/DriverInjectionPhase';
 import { CutoverDirector } from './simulation/phases/CutoverPhase';
 import { PostCheckPhase } from './simulation/phases/PostCheckPhase';
 import { CheckpointResumeSystem } from './simulation/CheckpointResumeSystem';
 import { ScoringSystem } from './engine/ScoringSystem';
 import { DataCenterAudio } from './audio/DataCenterAudio';
+import { buildTutorialLevel, ZoneManager } from './engine/TutorialLevel';
+import { UIManager } from './ui/UIManager';
+import { mountReactUi } from './ui/ReactUi';
+import { uiStore } from './ui/uiStore';
+import type { ESXiScanResult, DiscoveredVM } from './simulation/phases/EnvScanPhase';
 
 /** === Three.js 渲染基座 === */
 function setupScene(container: HTMLElement): {
@@ -46,36 +58,7 @@ function setupScene(container: HTMLElement): {
   container.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
-  scene.fog = new THREE.Fog(CLOUDTOWER_THEME.colors.bg.primary, 8, 40);
-
-  // 地面（指挥台）
-  const floor = new THREE.Mesh(
-    new THREE.PlaneGeometry(40, 40),
-    new THREE.MeshStandardMaterial({ color: 0x0f1726 }),
-  );
-  floor.rotation.x = -Math.PI / 2;
-  scene.add(floor);
-
-  // 环境光
-  scene.add(new THREE.HemisphereLight(0x99cfff, 0x0a1a2a, 0.6));
-  const dir = new THREE.DirectionalLight(0x88ccff, 0.5);
-  dir.position.set(5, 10, 5);
-  scene.add(dir);
-
-  // 几个"机架"
-  for (let i = 0; i < 6; i++) {
-    const rack = new THREE.Mesh(
-      new THREE.BoxGeometry(0.8, 2, 1.2),
-      new THREE.MeshStandardMaterial({
-        color: i < 3 ? 0x2a2f3a : 0x1a2035,
-        emissive: i < 3 ? 0x111111 : 0x002a4a,
-        emissiveIntensity: 0.2,
-      }),
-    );
-    const side = i < 3 ? -1 : 1;
-    rack.position.set(side * 3, 1, (i % 3) * 2 - 2);
-    scene.add(rack);
-  }
+  scene.fog = new THREE.Fog(CLOUDTOWER_THEME.colors.bg.primary, 10, 50);
 
   const camera = new THREE.PerspectiveCamera(
     75,
@@ -83,7 +66,7 @@ function setupScene(container: HTMLElement): {
     0.05,
     100,
   );
-  camera.position.set(0, 1.65, 5);
+  camera.position.set(0, 1.65, 3);
 
   window.addEventListener('resize', () => {
     renderer.setSize(container.clientWidth, container.clientHeight);
@@ -97,7 +80,7 @@ function setupScene(container: HTMLElement): {
 /** === 键盘/鼠标输入聚合 === */
 function setupInput(domElement: HTMLElement): {
   getInput: () => InputState;
-  reset: () => void;
+  isPointerLocked: () => boolean;
 } {
   const keys = new Set<string>();
   let mouseDX = 0;
@@ -132,73 +115,21 @@ function setupInput(domElement: HTMLElement): {
     return input;
   };
 
-  const reset = (): void => {
-    keys.clear();
-    mouseDX = 0;
-    mouseDY = 0;
-  };
-  return { getInput, reset };
+  return { getInput, isPointerLocked: () => document.pointerLockElement === domElement };
 }
 
-/** === HUD 简易渲染 === */
-function updateHud(
-  hud: HTMLPreElement,
-  player: PlayerController,
-  tool: ToolSystem,
-): void {
-  const p = player.state.position;
-  const tip = tool.current ? `${tool.current.name}（冷却 ${tool.current.currentCooldown.toFixed(0)}ms）` : '空手';
-  hud.textContent = [
-    `SmartX FPS · ${player.state.currentZone}`,
-    `pos ${p.x.toFixed(1)},${p.y.toFixed(1)},${p.z.toFixed(1)}  stamina ${player.state.staminaPercent.toFixed(0)}%`,
-    `tool: ${tip}`,
-    `按 1-6 切工具 · E 交互 · Shift 冲刺 · Ctrl 蹲下`,
-  ].join('\n');
-}
+/** === 事件驱动迁移控制器 === */
+class MigrationFlowController {
+  private task: MigrationTask | null = null;
+  private envResult: ESXiScanResult | null = null;
+  private primaryVm: (DiscoveredVM & { workloadType: VMWorkloadType }) | null = null;
 
-/** === 迁移剧情 demo：串起全流程 === */
-async function runMigrationScript(
-  fsm: MigrationStateMachine,
-  scoring: ScoringSystem,
-  checkpoints: CheckpointResumeSystem,
-): Promise<void> {
-  const task = fsm.createTask('vm-1000', 'vm-db-01', 120);
-  fsm.transition(task.id, 'ENV_SCAN');
+  private envScan = new EnvScanPhase();
+  private compat = new CompatibilityCheckPhase();
+  private networkPhase: NetworkMappingPhase | null = null;
+  private storagePhase: StorageMappingPhase | null = null;
 
-  const envScan = new EnvScanPhase();
-  const env = await envScan.execute({
-    host: '10.0.0.1',
-    port: 443,
-    username: 'administrator@vsphere.local',
-    password: '***',
-  });
-
-  fsm.transition(task.id, 'COMPATIBILITY_CHECK');
-  const compat = new CompatibilityCheckPhase();
-  await compat.execute(env.vms);
-
-  fsm.transition(task.id, 'NETWORK_MAPPING');
-  const sources: VSwitchNode[] = env.networks.map((n, i) => ({
-    id: `vsw-${i}`,
-    name: `vSwitch${i}`,
-    portGroups: [n.name],
-    vlanIds: n.vlanId ? [n.vlanId] : [],
-    position3D: [-5, 1, i - 1],
-    connected: false,
-  }));
-  const targets: BridgeNode[] = sources.map((_, i) => ({
-    id: `br-${i}`,
-    name: `brbond${i}`,
-    type: 'distributed',
-    availableBandwidthGbps: 10,
-    position3D: [5, 1, i - 1],
-  }));
-  const netPhase = new NetworkMappingPhase(sources, targets);
-  sources.forEach((s, i) => netPhase.attemptMapping(s.id, targets[i].id));
-  task.networkMapping = netPhase.state.completedMappings[0];
-
-  fsm.transition(task.id, 'STORAGE_MAPPING');
-  const pools: StoragePool[] = [
+  private storagePools: StoragePool[] = [
     {
       id: 'pool-nvme',
       name: 'NVMe-Pool-01',
@@ -236,83 +167,269 @@ async function runMigrationScript(
       color: '#CD7F32',
     },
   ];
-  const storagePhase = new StorageMappingPhase(pools);
-  const result = storagePhase.assign(
-    { ...env.vms[0], workloadType: 'DATABASE' as VMWorkloadType },
-    'pool-nvme',
-    { ioLocality: true, rdma: true },
-  );
-  task.storageMapping = result.mapping;
-  task.storageWarning = result.warning;
-  scoring.apply('USED_IO_LOCALITY');
-  scoring.apply('USED_RDMA');
-  scoring.apply('PERFECT_STORAGE_MAPPING');
 
-  fsm.transition(task.id, 'PRE_SNAPSHOT');
+  constructor(
+    private readonly fsm: MigrationStateMachine,
+    private readonly scoring: ScoringSystem,
+    private readonly checkpoints: CheckpointResumeSystem,
+  ) {}
 
-  fsm.transition(task.id, 'FULL_SYNC');
-  const sync = new DataSyncPhase();
-  sync.start(task, 1000, 200);
-  // 每 CHECKPOINT_INTERVAL_MS 保存断点
-  const CHECKPOINT_INTERVAL_MS = 60_000;
-  const checkpointTimer = window.setInterval(
-    () => checkpoints.saveCheckpoint(task),
-    CHECKPOINT_INTERVAL_MS,
-  );
-  await new Promise<void>((resolve) => {
-    const sub = EventBus.on('migration:progress', ({ progress }) => {
-      if (progress.fullSyncPercent >= 90) {
-        sub();
-        resolve();
+  private setObjective(text: string): void {
+    uiStore.patchHud({ objective: text });
+  }
+
+  get stage(): 'idle' | 'awaiting-scan' | 'awaiting-network' | 'awaiting-storage' | 'awaiting-cutover' | 'running' | 'done' {
+    if (!this.task) return 'idle';
+    const s = this.task.state;
+    if (s === 'IDLE') return 'awaiting-scan';
+    if (s === 'COMPATIBILITY_CHECK' || s === 'NETWORK_MAPPING') return 'awaiting-network';
+    if (s === 'STORAGE_MAPPING') return 'awaiting-storage';
+    if (s === 'PRE_SNAPSHOT') return 'awaiting-cutover';
+    if (s === 'COMPLETED' || s === 'FAILED') return 'done';
+    return 'running';
+  }
+
+  /** 阶段 1+2：登录 + 扫描 + 兼容性报告 */
+  async onCommandConsole(): Promise<void> {
+    if (this.stage !== 'idle' && this.stage !== 'awaiting-scan') {
+      UIManager.toast('info', '当前阶段不需要回到指挥台 vCenter 控制台');
+      return;
+    }
+    if (!this.task) {
+      this.task = this.fsm.createTask('vm-1000', 'vm-db-01', 120);
+      uiStore.patchHud({ state: this.task.state });
+    }
+    this.setObjective('在 UI 中输入 vCenter 凭据');
+    const cred = await UIManager.showVCenterLoginPanel();
+    this.fsm.transition(this.task.id, 'ENV_SCAN');
+    uiStore.patchHud({ state: 'ENV_SCAN' });
+
+    uiStore.openScanProgress();
+    const env = await this.envScan.execute(cred);
+    uiStore.closeScanProgress();
+    this.envResult = env;
+    await UIManager.showScanResultsPanel(env);
+
+    // 兼容性检查
+    this.fsm.transition(this.task.id, 'COMPATIBILITY_CHECK');
+    uiStore.patchHud({ state: 'COMPATIBILITY_CHECK' });
+    await this.compat.execute(env.vms);
+    const issues = env.vms
+      .filter((v) => v.snapshotExists)
+      .map((v) => ({
+        vmName: v.name,
+        severity: 'warn' as const,
+        message: '存在未合并的快照，建议合并后再迁移（不阻塞）。',
+      }));
+    await UIManager.showCompatibilityReport(env.vms, issues);
+
+    this.fsm.transition(this.task.id, 'NETWORK_MAPPING');
+    uiStore.patchHud({ state: 'NETWORK_MAPPING' });
+    this.setObjective('前往 [网络间] 与网络控制台交互（左侧走廊尽头）');
+    UIManager.toast('info', '前往网络间配置 vSwitch → Bridge 映射');
+  }
+
+  /** 阶段 3：网络映射 */
+  async onNetworkConsole(): Promise<void> {
+    if (!this.task || !this.envResult) {
+      UIManager.toast('warn', '请先在指挥台与 vCenter 控制台交互');
+      return;
+    }
+    if (this.task.state !== 'NETWORK_MAPPING') {
+      UIManager.toast('info', '网络映射阶段已完成或尚未到达');
+      return;
+    }
+    const sources: VSwitchNode[] = this.envResult.networks.map((n, i) => ({
+      id: `vsw-${i}`,
+      name: `vSwitch${i}`,
+      portGroups: [n.name],
+      vlanIds: n.vlanId ? [n.vlanId] : [],
+      position3D: [-5, 1, i - 1],
+      connected: false,
+    }));
+    const targets: BridgeNode[] = sources.map((_, i) => ({
+      id: `br-${i}`,
+      name: `brbond${i}`,
+      type: 'distributed',
+      availableBandwidthGbps: 10,
+      position3D: [5, 1, i - 1],
+    }));
+    this.networkPhase = new NetworkMappingPhase(sources, targets);
+    const { mappings } = await UIManager.showNetworkMappingPanel(sources, targets);
+    // 复刻到阶段引擎内以触发校验/事件
+    for (const m of mappings) {
+      const src = sources.find((s) => s.name === m.sourceVSwitch);
+      const tgt = targets.find((t) => t.name === m.targetBridgeName);
+      if (src && tgt) this.networkPhase.attemptMapping(src.id, tgt.id);
+    }
+    this.task.networkMapping = mappings[0] ?? null;
+    this.fsm.transition(this.task.id, 'STORAGE_MAPPING');
+    uiStore.patchHud({ state: 'STORAGE_MAPPING' });
+    this.setObjective('前往 [存储间] 与存储控制台交互（右侧走廊尽头）');
+    UIManager.toast('info', '网络映射完成，前往存储间');
+  }
+
+  /** 阶段 4：存储映射 */
+  async onStorageConsole(): Promise<void> {
+    if (!this.task || !this.envResult) {
+      UIManager.toast('warn', '请先完成前置步骤');
+      return;
+    }
+    if (this.task.state !== 'STORAGE_MAPPING') {
+      UIManager.toast('info', '存储映射阶段不在此时');
+      return;
+    }
+    const primary = this.envResult.vms[0];
+    this.primaryVm = { ...primary, workloadType: 'DATABASE' };
+    this.storagePhase = new StorageMappingPhase(this.storagePools);
+    const submission = await UIManager.showStorageMappingPanel(this.primaryVm, this.storagePools);
+    const { mapping, warning } = this.storagePhase.assign(this.primaryVm, submission.poolId, {
+      ioLocality: submission.ioLocality,
+      rdma: submission.rdma,
+    });
+    this.task.storageMapping = mapping;
+    this.task.storageWarning = warning;
+    if (submission.ioLocality) this.scoring.apply('USED_IO_LOCALITY');
+    if (submission.rdma) this.scoring.apply('USED_RDMA');
+    if (!warning) this.scoring.apply('PERFECT_STORAGE_MAPPING');
+    if (warning?.type === 'PERFORMANCE_DOWNGRADE') this.scoring.apply('WRONG_STORAGE_TIER');
+    uiStore.patchHud({ score: this.currentScore() });
+
+    this.fsm.transition(this.task.id, 'PRE_SNAPSHOT');
+    uiStore.patchHud({ state: 'PRE_SNAPSHOT' });
+    this.setObjective('返回 [指挥台] 启动切换控制台');
+    UIManager.toast('info', '存储映射完成，回到指挥台启动切换');
+  }
+
+  /** 阶段 5+6+7+8：同步/驱动/切换/验证 */
+  async onCutoverConsole(): Promise<void> {
+    if (!this.task || !this.envResult) {
+      UIManager.toast('warn', '尚未完成前置配置');
+      return;
+    }
+    if (this.task.state !== 'PRE_SNAPSHOT') {
+      UIManager.toast('info', '切换阶段不在此时');
+      return;
+    }
+    const primary = this.envResult.vms[0];
+    this.setObjective('全量同步进行中…');
+    this.fsm.transition(this.task.id, 'FULL_SYNC');
+    uiStore.patchHud({ state: 'FULL_SYNC' });
+
+    const sync = new DataSyncPhase();
+    sync.start(this.task, 1000, 200);
+    // 挑战事件：同步进度到 30% 时触发
+    let challengeFired = false;
+    const progressSub = EventBus.on('migration:progress', ({ progress }: { progress: MigrationTask['progress'] }) => {
+      uiStore.patchHud({
+        fullSyncPercent: progress.fullSyncPercent,
+        incrementalRounds: progress.incrementalRounds,
+      });
+      if (!challengeFired && progress.fullSyncPercent >= 30 && progress.fullSyncPercent < 80) {
+        challengeFired = true;
+        void this.runChallenge();
       }
     });
-  });
-  sync.stop();
-  window.clearInterval(checkpointTimer);
+    await new Promise<void>((resolve) => {
+      const sub = EventBus.on('migration:progress', ({ progress }: { progress: MigrationTask['progress'] }) => {
+        if (progress.fullSyncPercent >= 90) {
+          sub();
+          resolve();
+        }
+      });
+    });
+    sync.stop();
+    progressSub();
+    this.checkpoints.saveCheckpoint(this.task);
 
-  fsm.transition(task.id, 'INCREMENTAL_SYNC');
-  await sync.runIncrementalRounds(task);
+    this.setObjective('增量同步中…');
+    this.fsm.transition(this.task.id, 'INCREMENTAL_SYNC');
+    uiStore.patchHud({ state: 'INCREMENTAL_SYNC' });
+    await sync.runIncrementalRounds(this.task);
 
-  fsm.transition(task.id, 'DRIVER_INJECTION');
-  const driver = new DriverInjectionPhase();
-  const plan = driver.planFor(env.vms[0].guestOS, env.vms[0].moRef);
-  await driver.execute(task, plan);
+    this.setObjective('注入 VirtIO 驱动…');
+    this.fsm.transition(this.task.id, 'DRIVER_INJECTION');
+    uiStore.patchHud({ state: 'DRIVER_INJECTION' });
+    const driver = new DriverInjectionPhase();
+    const plan = driver.planFor(primary.guestOS, primary.moRef);
+    await driver.execute(this.task, plan);
 
-  fsm.transition(task.id, 'CUTOVER_READY');
-  fsm.transition(task.id, 'CUTOVER_EXECUTING');
-  const director = new CutoverDirector();
-  await director.executeCutover(task);
+    this.setObjective('切换中…');
+    this.fsm.transition(this.task.id, 'CUTOVER_READY');
+    this.fsm.transition(this.task.id, 'CUTOVER_EXECUTING');
+    uiStore.patchHud({ state: 'CUTOVER_EXECUTING' });
+    const director = new CutoverDirector();
+    await director.executeCutover(this.task);
 
-  fsm.transition(task.id, 'POST_CHECK');
-  const pc = new PostCheckPhase();
-  await pc.runAuto();
+    this.fsm.transition(this.task.id, 'POST_CHECK');
+    uiStore.patchHud({ state: 'POST_CHECK' });
+    const pc = new PostCheckPhase();
+    await pc.runAuto();
 
-  fsm.transition(task.id, 'COMPLETED');
-  scoring.apply('ZERO_DOWNTIME');
-  scoring.apply('AGENTLESS_AWARENESS');
-  console.log('[SmartX] Migration completed. Score:', scoring.finalize());
+    this.fsm.transition(this.task.id, 'COMPLETED');
+    uiStore.patchHud({ state: 'COMPLETED' });
+    this.scoring.apply('ZERO_DOWNTIME');
+    this.scoring.apply('AGENTLESS_AWARENESS');
+    const breakdown = this.scoring.finalize();
+    uiStore.patchHud({ score: breakdown.total });
+    this.setObjective('迁移完成！');
+    UIManager.showScorePanel(breakdown);
+    console.log('[SmartX] Migration completed. Score:', breakdown);
+  }
+
+  private async runChallenge(): Promise<void> {
+    const ch = SYNC_CHALLENGES[0];
+    EventBus.emit('ui:show_sync_challenge', ch);
+    const resp = await UIManager.showSyncChallengeModal(ch);
+    if (resp.isSmartXWay) {
+      this.scoring.apply('USED_CHECKPOINT_RESUME');
+    } else if (resp.id === 'restart_transfer') {
+      this.scoring.apply('MANUAL_RESTART_TRANSFER');
+    }
+    uiStore.patchHud({ score: this.currentScore() });
+    UIManager.toast(resp.isSmartXWay ? 'info' : 'warn', resp.effect);
+  }
+
+  private currentScore(): number {
+    return this.scoring.finalize().total;
+  }
 }
 
 /** === 启动 === */
 async function bootstrap(): Promise<void> {
   const container = document.getElementById('app')!;
-  const hud = document.getElementById('hud') as HTMLPreElement;
-  const { renderer, scene, camera } = setupScene(container);
+  const uiRoot = document.getElementById('ui-root')!;
+  mountReactUi(uiRoot);
 
+  const { renderer, scene, camera } = setupScene(container);
   const collision = new CollisionSystem();
-  // 把机架加入碰撞
-  scene.traverse((obj) => {
-    if ((obj as THREE.Mesh).isMesh && obj.position.y > 0.1) {
-      const box = new THREE.Box3().setFromObject(obj);
-      collision.add({ box, solid: true });
-    }
-  });
+
+  // 系统
+  new DataCenterAudio();
+  const scoring = new ScoringSystem();
+  const checkpoints = new CheckpointResumeSystem();
+  const fsm = new MigrationStateMachine();
+  const flow = new MigrationFlowController(fsm, scoring, checkpoints);
 
   const player = new PlayerController(camera, collision);
+  player.state.position.set(0, 0, 3);
   const bob = new HeadBobSystem();
   const tools = new ToolSystem();
   const interaction = new InteractionSystem(player);
   interaction.attach();
+
+  // 构建教程关
+  const level = buildTutorialLevel(scene, collision, {
+    onCommandConsole: () => void flow.onCommandConsole(),
+    onNetworkConsole: () => void flow.onNetworkConsole(),
+    onStorageConsole: () => void flow.onStorageConsole(),
+    onCutoverConsole: () => void flow.onCutoverConsole(),
+  });
+  const zoneManager = new ZoneManager(level.zones);
+  player.registerInteractable(level.consoles.command);
+  player.registerInteractable(level.consoles.network);
+  player.registerInteractable(level.consoles.storage);
+  player.registerInteractable(level.consoles.cutover);
 
   // 工具切换：数字键 1-6
   window.addEventListener('keydown', (e) => {
@@ -321,25 +438,24 @@ async function bootstrap(): Promise<void> {
       tools.equipBySlot(n);
       player.setEquippedTool(tools.current?.type ?? null);
     }
+    if (e.code === 'Escape') {
+      document.exitPointerLock?.();
+    }
   });
 
-  // 音效/评分/断点/状态机实例化
-  new DataCenterAudio();
-  const scoring = new ScoringSystem();
-  const checkpoints = new CheckpointResumeSystem();
-  const fsm = new MigrationStateMachine();
-
-  // 监听状态变化 → HUD 日志
-  EventBus.on('migration:stateChange', ({ prev, next }) => {
-    console.log(`[FSM] ${prev} → ${next}`);
+  // HUD 绑定
+  EventBus.on('interaction:hover', ({ target }: { target: { label: string } | null }) => {
+    uiStore.patchHud({ hoverHint: target?.label ?? null });
+  });
+  EventBus.on('migration:stateChange', ({ next }: { next: MigrationTask['state'] }) => {
+    uiStore.patchHud({ state: next });
   });
 
-  // 尝试与服务端会话建立（可选：未配置 VITE_SMARTX_API 时会静默失败）
+  // 尝试与服务端建立会话
   if (apiClient.hasBackend()) {
     try {
       await apiClient.login('Player');
       socketClient.connect();
-      // 订阅所有任务事件（演示场景下广播即可）
       EventBus.on('migration:created', ({ task }: { task: { id: string } }) => {
         socketClient.subscribe(task.id);
       });
@@ -351,20 +467,20 @@ async function bootstrap(): Promise<void> {
 
   const { getInput } = setupInput(renderer.domElement);
 
-  // 自动跑一次迁移演示脚本（无需真实 UI）
-  runMigrationScript(fsm, scoring, checkpoints).catch((err) =>
-    console.error('[migration demo] failed:', err),
-  );
-
   // 渲染循环
   const clock = new THREE.Clock();
   const tick = (): void => {
     const dt = Math.min(0.1, clock.getDelta());
     player.update(dt, getInput());
+    zoneManager.update(player);
     bob.apply(dt, player);
     tools.tick(dt);
     interaction.update();
-    updateHud(hud, player, tools);
+    uiStore.patchHud({
+      zone: player.state.currentZone,
+      stamina: player.state.staminaPercent,
+      tool: tools.current?.name ?? '',
+    });
     renderer.render(scene, camera);
     requestAnimationFrame(tick);
   };
@@ -372,7 +488,6 @@ async function bootstrap(): Promise<void> {
 }
 
 if (typeof document !== 'undefined') {
-  // 浏览器环境才引导；测试/类型校验时 import 不执行 DOM 逻辑
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => void bootstrap());
   } else {

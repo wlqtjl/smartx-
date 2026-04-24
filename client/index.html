@@ -8,13 +8,13 @@
       html, body { margin: 0; padding: 0; background: #0A0E1A; color: #E8EFF7;
         font-family: "Inter","Noto Sans SC",sans-serif; overflow: hidden; }
       #app { width: 100vw; height: 100vh; }
-      #hud { position: fixed; top: 12px; left: 12px; font-family: monospace;
-        font-size: 12px; color: #00B4FF; white-space: pre; pointer-events: none; }
+      #ui-root { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
+      #ui-root > * { pointer-events: auto; }
     </style>
   </head>
   <body>
     <div id="app"></div>
-    <pre id="hud"></pre>
+    <div id="ui-root"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
