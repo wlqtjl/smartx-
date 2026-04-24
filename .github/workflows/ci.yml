@@ -26,6 +26,8 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      - name: npm audit (high+ non-blocking)
+        run: npm audit --omit=dev --audit-level=high || true
 
   server:
     name: Server (tsc + node:test)
@@ -44,3 +46,5 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      - name: npm audit (high+ non-blocking)
+        run: npm audit --omit=dev --audit-level=high || true

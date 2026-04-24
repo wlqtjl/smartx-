@@ -1,0 +1,45 @@
+name: Bug report
+description: 报告一个可复现的问题
+labels: ['bug']
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: 问题描述
+      description: 简要说明遇到的问题与期望行为。
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 启动 server ...
+        2. 打开 client ...
+        3. 观察到 ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: 版本 / commit
+      placeholder: '0.1.0 or SHA'
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: 受影响范围
+      options:
+        - client
+        - server
+        - shared / DTO
+        - CI / 部署
+        - 文档
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志 / 截图
+      description: 请脱敏后贴出。

@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 安全漏洞
+    url: https://github.com/wlqtjl/smartx-/security/advisories/new
+    about: 请通过私密安全公告报告安全问题，不要在公开 Issue 中披露。

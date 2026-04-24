@@ -1,0 +1,44 @@
+# syntax=docker/dockerfile:1.7
+# ---- build stage ----
+FROM node:20-alpine AS build
+WORKDIR /app
+
+# shared package is a pure TS source (consumed via path alias); copy it
+COPY shared/ ./shared/
+COPY server/package.json server/package-lock.json ./server/
+RUN --mount=type=cache,target=/root/.npm \
+    cd server && npm ci
+
+COPY server/ ./server/
+RUN cd server && npm run build
+
+# Reinstall prod-only deps into a clean tree for the runtime image
+RUN --mount=type=cache,target=/root/.npm \
+    cd server && npm ci --omit=dev
+
+# ---- runtime stage ----
+FROM node:20-alpine AS runtime
+WORKDIR /app
+ENV NODE_ENV=production \
+    SMARTX_HOST=0.0.0.0 \
+    SMARTX_PORT=8787 \
+    SMARTX_DATA_PATH=/data/state.json
+
+# Non-root user
+RUN addgroup -S app && adduser -S app -G app && \
+    mkdir -p /data && chown -R app:app /data
+
+COPY --from=build --chown=app:app /app/shared ./shared
+COPY --from=build --chown=app:app /app/server/node_modules ./server/node_modules
+COPY --from=build --chown=app:app /app/server/dist ./server/dist
+COPY --from=build --chown=app:app /app/server/package.json ./server/package.json
+
+USER app
+WORKDIR /app/server
+EXPOSE 8787
+VOLUME ["/data"]
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.SMARTX_PORT||8787)+'/health').then(r=>r.ok?0:process.exit(1)).catch(()=>process.exit(1))"
+
+CMD ["node", "dist/server/src/index.js"]

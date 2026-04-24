@@ -4,17 +4,92 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>数据中心攻坚战 · SmartX FPS</title>
+    <meta
+      name="description"
+      content="以 SmartX V2V 迁移为主题的 FPS × 模拟经营体验：在 3D 机房中操作控制台，驱动真实迁移状态机并依据执行质量计分。"
+    />
+    <meta name="theme-color" content="#0A0E1A" />
+    <meta name="color-scheme" content="dark" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="manifest" href="/site.webmanifest" />
+
+    <!-- Open Graph / Social -->
+    <meta property="og:type" content="website" />
+    <meta property="og:locale" content="zh_CN" />
+    <meta property="og:title" content="数据中心攻坚战 · SmartX FPS" />
+    <meta
+      property="og:description"
+      content="在 3D 机房中完成 SmartX V2V 迁移全流程：扫描 → 兼容性 → 网络/存储映射 → 数据同步 → 驱动注入 → 切换 → 验证。"
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="数据中心攻坚战 · SmartX FPS" />
+    <meta
+      name="twitter:description"
+      content="FPS × SmartX 迁移仿真。"
+    />
+
     <style>
       html, body { margin: 0; padding: 0; background: #0A0E1A; color: #E8EFF7;
         font-family: "Inter","Noto Sans SC",sans-serif; overflow: hidden; }
       #app { width: 100vw; height: 100vh; }
       #ui-root { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
       #ui-root > * { pointer-events: auto; }
+      #fallback {
+        position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+        padding: 24px; text-align: center; z-index: 100;
+        background: radial-gradient(ellipse at center, #0F1F34 0%, #0A0E1A 70%);
+      }
+      #fallback.visible { display: flex; }
+      #fallback .card {
+        max-width: 520px; border: 1px solid #1F3552; border-radius: 12px;
+        padding: 28px 32px; background: rgba(10, 14, 26, 0.85);
+        box-shadow: 0 0 40px rgba(63, 167, 255, 0.15);
+      }
+      #fallback h1 { margin: 0 0 8px; font-size: 22px; color: #9CDCFE; }
+      #fallback p { margin: 8px 0; line-height: 1.6; color: #AFC1D6; }
+      #fallback code { background: #142238; padding: 2px 6px; border-radius: 4px; color: #E8EFF7; }
     </style>
   </head>
   <body>
     <div id="app"></div>
     <div id="ui-root"></div>
+
+    <!-- 浏览器不支持 WebGL / JS 禁用时的降级文案 -->
+    <div id="fallback" role="alert" aria-live="polite">
+      <div class="card">
+        <h1>无法启动 3D 场景</h1>
+        <p>
+          本作依赖 <strong>WebGL</strong>。请使用较新版本的桌面浏览器
+          （Chrome / Edge / Firefox / Safari ≥ 最近两个大版本）访问。
+        </p>
+        <p>
+          若已开启硬件加速仍无法加载，请尝试：
+          更新显卡驱动、关闭隐私浏览、或在浏览器地址栏输入
+          <code>chrome://gpu</code> / <code>about:support</code> 查看 WebGL 状态。
+        </p>
+        <p>推荐运行环境：桌面浏览器 + 分辨率 ≥ 1280×720，键鼠可用。</p>
+      </div>
+    </div>
+
+    <noscript>
+      <div style="padding:24px;color:#E8EFF7;">
+        本作需要启用 JavaScript 才能运行。请在浏览器设置中启用后重试。
+      </div>
+    </noscript>
+
+    <script>
+      // 检测 WebGL；失败时显示降级层。
+      (function () {
+        try {
+          const canvas = document.createElement('canvas');
+          const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
+          if (!gl) throw new Error('no webgl');
+        } catch (e) {
+          const el = document.getElementById('fallback');
+          if (el) el.classList.add('visible');
+        }
+      })();
+    </script>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

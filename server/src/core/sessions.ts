@@ -6,9 +6,11 @@ import { secureToken } from './utils.js';
 import type { Session } from '@shared/index';
 
 const SESSION_TTL_MS = 60 * 60 * 1000; // 1h
+const PURGE_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
 class SessionStore {
   private sessions = new Map<string, Session>();
+  private purgeTimer: NodeJS.Timeout | null = null;
 
   create(playerName: string): Session {
     const token = secureToken();
@@ -38,10 +40,33 @@ class SessionStore {
     this.sessions.delete(token);
   }
 
-  purgeExpired(): void {
+  size(): number {
+    return this.sessions.size;
+  }
+
+  purgeExpired(): number {
     const now = Date.now();
+    let removed = 0;
     for (const [t, s] of this.sessions) {
-      if (s.expiresAt < now) this.sessions.delete(t);
+      if (s.expiresAt < now) {
+        this.sessions.delete(t);
+        removed++;
+      }
+    }
+    return removed;
+  }
+
+  /** Start a background timer that periodically evicts expired sessions. */
+  startPurgeInterval(): void {
+    if (this.purgeTimer) return;
+    this.purgeTimer = setInterval(() => this.purgeExpired(), PURGE_INTERVAL_MS);
+    this.purgeTimer.unref?.();
+  }
+
+  stopPurgeInterval(): void {
+    if (this.purgeTimer) {
+      clearInterval(this.purgeTimer);
+      this.purgeTimer = null;
     }
   }
 }

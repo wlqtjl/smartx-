@@ -1,24 +1,14 @@
 /**
- * 入口：监听 SMARTX_PORT 环境变量（默认 8787）。
+ * 入口：解析环境变量，启动 HTTP + WS 服务。
  */
 import { createServer } from './server.js';
 import { log } from './core/logger.js';
-
-const PORT = Number(process.env.SMARTX_PORT ?? 8787);
-const HOST = process.env.SMARTX_HOST ?? '0.0.0.0';
-const DATA_PATH = process.env.SMARTX_DATA_PATH;
-const allowedOrigins = (process.env.SMARTX_ALLOWED_ORIGINS ?? '')
-  .split(',')
-  .map((s) => s.trim())
-  .filter(Boolean);
+import { loadConfig } from './core/config.js';
 
 const main = async (): Promise<void> => {
-  const server = await createServer({
-    port: PORT,
-    host: HOST,
-    dataPath: DATA_PATH,
-    allowedOrigins,
-  });
+  const config = loadConfig();
+  log.setLevel(config.logLevel);
+  const server = await createServer({ config });
 
   const shutdown = async (): Promise<void> => {
     log.info('server.shutdown.begin');

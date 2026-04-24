@@ -1,0 +1,72 @@
+services:
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    image: smartx-server:local
+    environment:
+      SMARTX_HOST: 0.0.0.0
+      SMARTX_PORT: '8787'
+      SMARTX_DATA_PATH: /data/state.json
+      SMARTX_ALLOWED_ORIGINS: ${SMARTX_ALLOWED_ORIGINS:-http://localhost:8080}
+      SMARTX_WS_ALLOWED_ORIGINS: ${SMARTX_WS_ALLOWED_ORIGINS:-http://localhost:8080}
+      # Persistence backend. Default `json` is single-node demo only.
+      # For multi-instance use the `postgres` profile or set SMARTX_STORE=sqlite|postgres yourself.
+      SMARTX_STORE: ${SMARTX_STORE:-json}
+      SMARTX_ALLOW_JSON_IN_PROD: ${SMARTX_ALLOW_JSON_IN_PROD:-1}
+      SMARTX_SQLITE_PATH: ${SMARTX_SQLITE_PATH:-/data/smartx.db}
+      DATABASE_URL: ${DATABASE_URL:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      NODE_ENV: production
+    ports:
+      - '${SMARTX_PORT:-8787}:8787'
+    volumes:
+      - smartx-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:8787/health').then(r=>r.ok?0:process.exit(1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  client:
+    build:
+      context: .
+      dockerfile: Dockerfile.client
+      args:
+        # Bake the backend URL into the bundle. For same-origin deploys, use ""
+        # and enable the /api + /ws proxy in deploy/nginx.conf.
+        VITE_SMARTX_API: ${VITE_SMARTX_API:-http://localhost:8787}
+    image: smartx-client:local
+    ports:
+      - '${CLIENT_PORT:-8080}:8080'
+    depends_on:
+      - server
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Postgres profile — enable with:  docker compose --profile postgres up
+  # Combine with:  SMARTX_STORE=postgres DATABASE_URL=postgres://smartx:smartx@db/smartx
+  # ─────────────────────────────────────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    profiles: ['postgres']
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-smartx}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-smartx}
+      POSTGRES_DB: ${POSTGRES_DB:-smartx}
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - smartx-pg:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-smartx}']
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  smartx-data:
+  smartx-pg:
+

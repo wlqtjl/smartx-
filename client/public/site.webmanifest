@@ -1,0 +1,20 @@
+{
+  "name": "数据中心攻坚战 · SmartX FPS",
+  "short_name": "SmartX FPS",
+  "description": "以 SmartX V2V 迁移为主题的 FPS × 模拟经营体验",
+  "start_url": "/",
+  "scope": "/",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "theme_color": "#0A0E1A",
+  "background_color": "#0A0E1A",
+  "lang": "zh-CN",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
