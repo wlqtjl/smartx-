@@ -39,6 +39,17 @@ interface WithValid<T> extends Request {
   session?: { token: string };
 }
 
+/** Parse `Authorization: Bearer <token>` without regex (ReDoS-free). */
+const parseBearer = (headerValue: string | undefined): string | null => {
+  if (!headerValue) return null;
+  const trimmed = headerValue.trim();
+  const prefix = 'bearer ';
+  if (trimmed.length <= prefix.length) return null;
+  if (trimmed.slice(0, prefix.length).toLowerCase() !== prefix) return null;
+  const token = trimmed.slice(prefix.length).trim();
+  return token.length > 0 ? token : null;
+};
+
 /**
  * PR #1: authentication gate. Accepts either
  *   - `Authorization: Bearer <JWT>` (real identity via `AuthService`), or
@@ -51,8 +62,7 @@ const requireSession =
   (app: AppContainer) =>
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     // Prefer Bearer JWT when AuthService is configured.
-    const authHeader = req.header('authorization');
-    const bearer = authHeader ? /^Bearer\s+(.+)$/i.exec(authHeader.trim())?.[1] : undefined;
+    const bearer = parseBearer(req.header('authorization'));
     if (bearer && app.auth) {
       try {
         const principal = await app.auth.verifyAccessToken(bearer);
@@ -95,11 +105,8 @@ const makeLimiter = (perMin: number, windowMs = 60_000): RateLimitRequestHandler
     legacyHeaders: false,
     keyGenerator: (req) => {
       // Prefer Bearer so JWT-authenticated traffic shares a per-user bucket.
-      const authHeader = req.header('authorization');
-      if (authHeader) {
-        const m = /^Bearer\s+(.+)$/i.exec(authHeader.trim());
-        if (m) return `bearer:${m[1]}`;
-      }
+      const bearer = parseBearer(req.header('authorization'));
+      if (bearer) return `bearer:${bearer}`;
       return req.header('x-session-token') ?? req.ip ?? 'unknown';
     },
     handler: (_req, res) => {
@@ -116,6 +123,8 @@ export const createApiRouter = (app: AppContainer, config: AppConfig): Router =>
   const heavyLimiter = makeLimiter(Math.max(5, Math.floor(config.rateLimitPerMin / 2)));
   // Generic writes fall back to the configured per-minute quota.
   const writeLimiter = makeLimiter(config.rateLimitPerMin);
+  // Authenticated reads: more generous cap (2× writes) so dashboards can poll.
+  const readLimiter = makeLimiter(config.rateLimitPerMin * 2);
 
   // ------------ Auth ------------
   r.post(
@@ -137,6 +146,7 @@ export const createApiRouter = (app: AppContainer, config: AppConfig): Router =>
 
   r.delete(
     '/auth/session',
+    authLimiter,
     requireSession(app),
     wrap((req, res) => {
       const token = req.header('x-session-token');
@@ -174,6 +184,7 @@ export const createApiRouter = (app: AppContainer, config: AppConfig): Router =>
   // ------------ Tasks ------------
   r.get(
     '/migration/tasks',
+    readLimiter,
     requireSession(app),
     wrap((_req, res) => {
       res.json(app.fsm.allTasks());
@@ -196,6 +207,7 @@ export const createApiRouter = (app: AppContainer, config: AppConfig): Router =>
 
   r.get(
     '/migration/tasks/:id',
+    readLimiter,
     requireSession(app),
     wrap((req, res) => {
       const task = app.fsm.getTask(req.params.id);
@@ -383,6 +395,7 @@ export const createApiRouter = (app: AppContainer, config: AppConfig): Router =>
   // ------------ Checkpoints ------------
   r.get(
     '/migration/tasks/:id/checkpoints',
+    readLimiter,
     requireSession(app),
     wrap((req, res) => {
       res.json(app.checkpoints.getHistory(req.params.id));
@@ -420,6 +433,7 @@ export const createApiRouter = (app: AppContainer, config: AppConfig): Router =>
   // ------------ Scoring ------------
   r.get(
     '/migration/tasks/:id/score',
+    readLimiter,
     requireSession(app),
     wrap((req, res) => {
       res.json(app.scoring.for(req.params.id).finalize());

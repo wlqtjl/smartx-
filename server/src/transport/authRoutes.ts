@@ -21,12 +21,16 @@ interface AuthReq extends Request {
   auth?: { user: AuthenticatedUser; sid: string };
 }
 
-/** 从 Authorization / cookie 中提取 bearer token。仅依赖 header，避免引入 cookie-parser。 */
+/** Parse `Authorization: Bearer <token>` without regex (ReDoS-free). */
 const extractBearer = (req: Request): string | null => {
   const h = req.header('authorization');
   if (!h) return null;
-  const m = /^Bearer\s+(.+)$/i.exec(h.trim());
-  return m ? m[1]! : null;
+  const trimmed = h.trim();
+  const prefix = 'bearer ';
+  if (trimmed.length <= prefix.length) return null;
+  if (trimmed.slice(0, prefix.length).toLowerCase() !== prefix) return null;
+  const token = trimmed.slice(prefix.length).trim();
+  return token.length > 0 ? token : null;
 };
 
 const makeLoginLimiter = (): RateLimitRequestHandler =>
@@ -42,6 +46,19 @@ const makeLoginLimiter = (): RateLimitRequestHandler =>
     },
     handler: (_req, res) => {
       res.status(429).json(asError(429, 'too many login attempts, slow down'));
+    },
+  });
+
+/** Generic per-IP limiter for other auth routes (refresh/logout/me/oidc). */
+const makeAuthLimiter = (limit: number): RateLimitRequestHandler =>
+  rateLimit({
+    windowMs: 60_000,
+    limit,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    keyGenerator: (req) => req.ip ?? 'unknown',
+    handler: (_req, res) => {
+      res.status(429).json(asError(429, 'rate limit exceeded, slow down'));
     },
   });
 
@@ -72,11 +89,15 @@ export const createAuthRouter = (app: AppContainer, config: AppConfig): Router =
   }
 
   const loginLimiter = makeLoginLimiter();
+  // 20/min for refresh/logout/me/oidc — tight enough to block brute force on
+  // stolen-token probing yet generous for legitimate SPA polling.
+  const authLimiter = makeAuthLimiter(20);
   const auth = app.auth;
 
-  // ── Self-register (dev / admin-only) ─────────────────────────────────
+  // ── Password register (dev / admin-only) ─────────────────────────────
   r.post(
     '/password/register',
+    authLimiter,
     validateBody(passwordRegisterBody),
     async (req, res) => {
       if (!config.auth.allowSelfRegister) {
@@ -120,7 +141,7 @@ export const createAuthRouter = (app: AppContainer, config: AppConfig): Router =
   );
 
   // ── Refresh ──────────────────────────────────────────────────────────
-  r.post('/refresh', validateBody(refreshBody), async (req, res) => {
+  r.post('/refresh', authLimiter, validateBody(refreshBody), async (req, res) => {
     const body = (req as Request & { validBody: { refreshToken: string } }).validBody;
     try {
       const pair = await auth.refresh(body.refreshToken);
@@ -136,7 +157,7 @@ export const createAuthRouter = (app: AppContainer, config: AppConfig): Router =
   });
 
   // ── Logout ───────────────────────────────────────────────────────────
-  r.post('/logout', async (req: AuthReq, res: Response) => {
+  r.post('/logout', authLimiter, async (req: AuthReq, res: Response) => {
     const token = extractBearer(req);
     if (!token) {
       // Fast-path: no bearer → nothing to revoke. Stay 204 idempotent.
@@ -154,7 +175,7 @@ export const createAuthRouter = (app: AppContainer, config: AppConfig): Router =
   });
 
   // ── Me ───────────────────────────────────────────────────────────────
-  r.get('/me', async (req, res) => {
+  r.get('/me', authLimiter, async (req, res) => {
     const token = extractBearer(req);
     if (!token) {
       res.status(401).json(asError(401, 'missing bearer token'));
@@ -173,7 +194,7 @@ export const createAuthRouter = (app: AppContainer, config: AppConfig): Router =
   });
 
   // ── OIDC ─────────────────────────────────────────────────────────────
-  r.get('/oidc/start', (_req, res) => {
+  r.get('/oidc/start', authLimiter, (_req, res) => {
     if (!app.oidc) {
       res.status(501).json(asError(501, 'OIDC not configured'));
       return;
@@ -182,7 +203,7 @@ export const createAuthRouter = (app: AppContainer, config: AppConfig): Router =
     res.redirect(302, url);
   });
 
-  r.get('/oidc/callback', async (req, res) => {
+  r.get('/oidc/callback', authLimiter, async (req, res) => {
     if (!app.oidc) {
       res.status(501).json(asError(501, 'OIDC not configured'));
       return;
