@@ -94,7 +94,10 @@ export class JsonStore {
   }
 
   async saveNow(): Promise<void> {
-    if (this.readOnly) return;
+    if (this.readOnly) {
+      log.warn('state.save.skipped.readonly', { path: this.filePath });
+      return;
+    }
     const data: Snapshot = {
       schemaVersion: STORAGE_SCHEMA_VERSION,
       tasks: this.fsm.allTasks(),

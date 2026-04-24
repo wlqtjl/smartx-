@@ -85,7 +85,8 @@
           var gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
           if (!gl) throw new Error('no webgl');
         } catch (e) {
-          document.getElementById('fallback').classList.add('visible');
+          var el = document.getElementById('fallback');
+          if (el) el.classList.add('visible');
         }
       })();
     </script>

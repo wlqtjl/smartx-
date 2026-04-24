@@ -5,6 +5,7 @@ import http from 'node:http';
 import path from 'node:path';
 import express, { type Express, type Request, type Response } from 'express';
 import cors from 'cors';
+import rateLimit from 'express-rate-limit';
 import { createApiRouter } from './transport/restApi.js';
 import { attachWebSocket, type WsHandle } from './transport/wsServer.js';
 import { createAppContainer, type AppContainer } from './container.js';
@@ -75,6 +76,17 @@ export const createServer = async (opts: ServerOptions = {}): Promise<SmartXServ
   );
 
   const startedAt = Date.now();
+
+  // /health performs a filesystem probe; /metrics walks internal maps. Both are
+  // public, so cap their rate per-IP to protect against hammer-the-probe attacks.
+  const probeLimiter = rateLimit({
+    windowMs: 60_000,
+    limit: 120,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+  });
+  app.use('/health', probeLimiter);
+  app.use('/metrics', probeLimiter);
 
   app.get('/health', async (_req: Request, res: Response) => {
     const storageErr = await container.storage.checkWritable();
