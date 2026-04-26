@@ -17,6 +17,7 @@ import type {
   StorageMismatchWarning,
 } from '../simulation/phases/StorageMappingPhase';
 import type { SyncChallenge, ChallengeResponse } from '../simulation/phases/DataSyncPhase';
+import type { InjectedFault, FaultResolution } from '../simulation/phases/FaultInjectionPhase';
 import type { MigrationState } from '../simulation/MigrationStateMachine';
 import type { ScoreBreakdown } from '../engine/ScoringSystem';
 import type { DataCenterZone } from '../fps/PlayerController';
@@ -54,6 +55,11 @@ export interface ChallengePanel {
   open: boolean;
   challenge: SyncChallenge | null;
 }
+export interface FaultPanel {
+  open: boolean;
+  faults: InjectedFault[];
+  resolutions: FaultResolution[];
+}
 export interface ScorePanel {
   open: boolean;
   breakdown: ScoreBreakdown | null;
@@ -79,6 +85,7 @@ export interface UiState {
   network: NetworkPanel;
   storage: StoragePanel;
   challenge: ChallengePanel;
+  fault: FaultPanel;
   score: ScorePanel;
   hud: HudState;
   toast: { id: number; level: 'info' | 'warn' | 'error'; text: string }[];
@@ -92,6 +99,7 @@ const initial: UiState = {
   network: { open: false, sources: [], targets: [], completed: [] },
   storage: { open: false, vm: null, pools: [], mapping: null, warning: null },
   challenge: { open: false, challenge: null },
+  fault: { open: false, faults: [], resolutions: [] },
   score: { open: false, breakdown: null },
   hud: {
     zone: 'COMMAND_POST',
@@ -193,6 +201,24 @@ class UiStoreImpl {
   }
   closeChallenge(): void {
     this.set({ challenge: { open: false, challenge: null } });
+  }
+
+  openFaults(faults: InjectedFault[]): void {
+    this.set({ fault: { open: true, faults, resolutions: [] } });
+  }
+  recordFaultResolution(res: FaultResolution): void {
+    this.set({
+      fault: {
+        ...this.state.fault,
+        resolutions: [
+          ...this.state.fault.resolutions.filter((r) => r.faultId !== res.faultId),
+          res,
+        ],
+      },
+    });
+  }
+  closeFaults(): void {
+    this.set({ fault: { open: false, faults: [], resolutions: [] } });
   }
 
   openScore(b: ScoreBreakdown): void {

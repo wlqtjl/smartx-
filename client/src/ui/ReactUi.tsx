@@ -647,6 +647,115 @@ const ChallengeModal: React.FC<{ state: UiState }> = ({ state }) => {
   );
 };
 
+// ---------------- Fault Injection panel ----------------
+const FaultPanelView: React.FC<{ state: UiState }> = ({ state }) => {
+  if (!state.fault.open) return null;
+  const { faults, resolutions } = state.fault;
+
+  const onPick = (faultId: string, action: 'use' | 'ignore'): void => {
+    const fault = faults.find((f) => f.id === faultId);
+    if (!fault) return;
+    // 当前面板只提供"使用 [requiredTool] 修复"和"忽略"两个按钮，
+    // 因此 action='use' 等价于用了正确工具。这里仍按真实判定写入 `resolved`，
+    // 防止未来扩展为"选择任意工具"时这块预览失真。
+    const toolUsed = action === 'use' ? fault.def.requiredTool : null;
+    const resolved = toolUsed === fault.def.requiredTool;
+    UIManager.recordFaultResolution({
+      faultId,
+      toolUsed,
+      resolved,
+      rule: resolved ? fault.def.fixRule : fault.def.ignoreRule,
+      message: resolved ? `已修复：${fault.def.title}` : `已忽略：${fault.def.title}`,
+    });
+  };
+
+  // 计算"全部决策完毕"
+  const allDone =
+    faults.length > 0 && faults.every((f) => resolutions.some((r) => r.faultId === f.id));
+
+  // 把 UI 累积的 resolution 反推成 choice 列表交给上游 promise
+  const submit = (): void => {
+    const choices = resolutions.map((r) => ({
+      faultId: r.faultId,
+      action: (r.toolUsed === null ? 'ignore' : 'use') as 'use' | 'ignore',
+    }));
+    UIManager.submitFaultChoices(choices);
+  };
+
+  return (
+    <div style={overlayStyle}>
+      <div style={{ ...panelBase, width: 600, maxHeight: '80vh', overflowY: 'auto' }}>
+        <h2 style={{ color: C.accent.warning, margin: 0 }}>
+          ⚠️ 故障注入 · 扫描期检测到 {faults.length} 个问题
+        </h2>
+        <p style={{ color: C.text.secondary, fontSize: 12, marginTop: 4 }}>
+          每条故障可用专用工具修复（加分），也可以选择忽略（扣分，但不阻塞迁移）。
+        </p>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 12 }}>
+          {faults.map((f) => {
+            const decided = resolutions.find((r) => r.faultId === f.id);
+            const fixed = decided?.resolved === true;
+            const ignored = decided !== undefined && decided.toolUsed === null;
+            return (
+              <div
+                key={f.id}
+                style={{
+                  border: `1px solid ${
+                    fixed ? C.accent.success : ignored ? C.accent.error : C.bg.panelBorder
+                  }`,
+                  borderRadius: 4,
+                  padding: 12,
+                  background: C.bg.secondary,
+                }}
+              >
+                <div style={{ fontWeight: 600, color: C.text.primary }}>
+                  {fixed ? '✓ ' : ignored ? '✗ ' : ''}
+                  {f.def.title}
+                </div>
+                <div style={{ fontSize: 12, color: C.text.secondary, marginTop: 4 }}>
+                  {f.contextDescription}
+                </div>
+                <div style={{ fontSize: 11, color: C.accent.smartx, marginTop: 6 }}>
+                  {f.def.toolHint}
+                </div>
+                <div style={{ fontSize: 11, color: C.text.muted, marginTop: 2, fontStyle: 'italic' }}>
+                  {f.def.smartxNarrative}
+                </div>
+                {!decided && (
+                  <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
+                    <button style={btn(true)} onClick={() => onPick(f.id, 'use')}>
+                      使用 {f.def.requiredTool} 修复
+                    </button>
+                    <button style={btn(false)} onClick={() => onPick(f.id, 'ignore')}>
+                      忽略
+                    </button>
+                  </div>
+                )}
+                {decided && (
+                  <div
+                    style={{
+                      marginTop: 8,
+                      fontSize: 12,
+                      color: fixed ? C.accent.success : C.accent.error,
+                    }}
+                  >
+                    {decided.message}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <div style={{ marginTop: 16, display: 'flex', justifyContent: 'flex-end' }}>
+          <button style={btn(allDone)} disabled={!allDone} onClick={submit}>
+            提交决议 →
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // ---------------- Score summary ----------------
 const ScorePanel: React.FC<{ state: UiState }> = ({ state }) => {
   if (!state.score.open || !state.score.breakdown) return null;
@@ -725,6 +834,7 @@ const App: React.FC = () => {
       <NetworkPanel state={state} />
       <StoragePanelView state={state} />
       <ChallengeModal state={state} />
+      <FaultPanelView state={state} />
       <ScorePanel state={state} />
     </>
   );

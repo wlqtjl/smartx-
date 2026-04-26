@@ -34,6 +34,7 @@ import {
 } from './simulation/phases/StorageMappingPhase';
 import { DataSyncPhase, SYNC_CHALLENGES } from './simulation/phases/DataSyncPhase';
 import { DriverInjectionPhase } from './simulation/phases/DriverInjectionPhase';
+import { FaultInjectionPhase } from './simulation/phases/FaultInjectionPhase';
 import { CutoverDirector } from './simulation/phases/CutoverPhase';
 import { PostCheckPhase } from './simulation/phases/PostCheckPhase';
 import { CheckpointResumeSystem } from './simulation/CheckpointResumeSystem';
@@ -41,6 +42,9 @@ import { ScoringSystem } from './engine/ScoringSystem';
 import { DataCenterAudio } from './audio/DataCenterAudio';
 import { buildTutorialLevelAsync, ZoneManager } from './engine/TutorialLevel';
 import { sharedAssetLoader } from './engine/AssetLoader';
+import { configurePbrRenderer } from './engine/PbrRenderer';
+import { installRoomEnvironment } from './engine/EnvironmentLighting';
+import { PostFx } from './engine/PostFx';
 import { ToolViewmodel } from './fps/ToolViewmodel';
 import { UIManager } from './ui/UIManager';
 import { mountReactUi } from './ui/ReactUi';
@@ -52,15 +56,21 @@ function setupScene(container: HTMLElement): {
   renderer: THREE.WebGLRenderer;
   scene: THREE.Scene;
   camera: THREE.PerspectiveCamera;
+  postFx: PostFx | null;
+  setSize: (w: number, h: number) => void;
 } {
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setSize(container.clientWidth, container.clientHeight);
   renderer.setPixelRatio(window.devicePixelRatio);
   renderer.setClearColor(CLOUDTOWER_THEME.colors.bg.primary);
+  // PBR 基线：PCFSoft 阴影 + ACES tone mapping + sRGB 输出
+  configurePbrRenderer(renderer);
   container.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
   scene.fog = new THREE.Fog(CLOUDTOWER_THEME.colors.bg.primary, 10, 50);
+  // 程序化 IBL：让 MeshStandardMaterial 的金属/反射立刻生效
+  installRoomEnvironment(renderer, scene);
 
   const camera = new THREE.PerspectiveCamera(
     75,
@@ -70,13 +80,21 @@ function setupScene(container: HTMLElement): {
   );
   camera.position.set(0, 1.65, 3);
 
-  window.addEventListener('resize', () => {
-    renderer.setSize(container.clientWidth, container.clientHeight);
-    camera.aspect = container.clientWidth / container.clientHeight;
+  // 后处理：Bloom + SMAA。无 WebGL 时优雅降级到 null。
+  const postFx = PostFx.tryAttach(renderer, scene, camera);
+
+  const setSize = (w: number, h: number): void => {
+    renderer.setSize(w, h);
+    camera.aspect = w / h;
     camera.updateProjectionMatrix();
+    postFx?.setSize(w, h, renderer.getPixelRatio());
+  };
+
+  window.addEventListener('resize', () => {
+    setSize(container.clientWidth, container.clientHeight);
   });
 
-  return { renderer, scene, camera };
+  return { renderer, scene, camera, postFx, setSize };
 }
 
 /** === 键盘/鼠标输入聚合 === */
@@ -128,6 +146,7 @@ class MigrationFlowController {
 
   private envScan = new EnvScanPhase();
   private compat = new CompatibilityCheckPhase();
+  private faultInjection = new FaultInjectionPhase();
   private networkPhase: NetworkMappingPhase | null = null;
   private storagePhase: StorageMappingPhase | null = null;
 
@@ -211,6 +230,9 @@ class MigrationFlowController {
     uiStore.closeScanProgress();
     this.envResult = env;
     await UIManager.showScanResultsPanel(env);
+
+    // 故障注入：随机植入 1-2 个真实迁移场景中的故障，玩家用工具修复或忽略
+    await this.runFaultInjection(env);
 
     // 兼容性检查
     this.fsm.transition(this.task.id, 'COMPATIBILITY_CHECK');
@@ -392,6 +414,31 @@ class MigrationFlowController {
     UIManager.toast(resp.isSmartXWay ? 'info' : 'warn', resp.effect);
   }
 
+  /**
+   * 扫描后弹出故障面板：玩家针对每条故障选择"用工具修复"或"忽略"。
+   * UI 只回传选择，真正的判定走 `FaultInjectionPhase.resolve()` —— 业务规则在阶段引擎里集中维护。
+   */
+  private async runFaultInjection(env: ESXiScanResult): Promise<void> {
+    const faults = this.faultInjection.inject(env);
+    if (faults.length === 0) return;
+    this.setObjective(`检测到 ${faults.length} 个故障，请在面板中处理`);
+    const choices = await UIManager.showFaultInjectionPanel(faults);
+    let fixed = 0;
+    let ignored = 0;
+    for (const choice of choices) {
+      const fault = faults.find((f) => f.id === choice.faultId);
+      if (!fault) continue;
+      const tool = choice.action === 'use' ? fault.def.requiredTool : null;
+      const resolution = this.faultInjection.resolve(fault, tool);
+      if (resolution.rule) this.scoring.apply(resolution.rule);
+      if (resolution.resolved) fixed++;
+      else if (resolution.toolUsed === null) ignored++;
+    }
+    uiStore.patchHud({ score: this.currentScore() });
+    if (fixed > 0) UIManager.toast('info', `已修复 ${fixed} 项故障，得分已加`);
+    if (ignored > 0) UIManager.toast('warn', `${ignored} 项故障被忽略，已扣分`);
+  }
+
   private currentScore(): number {
     return this.scoring.finalize().total;
   }
@@ -403,7 +450,7 @@ async function bootstrap(): Promise<void> {
   const uiRoot = document.getElementById('ui-root')!;
   mountReactUi(uiRoot);
 
-  const { renderer, scene, camera } = setupScene(container);
+  const { renderer, scene, camera, postFx } = setupScene(container);
   // 摄像机加入场景图，使其 child（如 ToolViewmodel）也参与渲染
   scene.add(camera);
   const collision = new CollisionSystem();
@@ -496,7 +543,8 @@ async function bootstrap(): Promise<void> {
       stamina: player.state.staminaPercent,
       tool: tools.current?.name ?? '',
     });
-    renderer.render(scene, camera);
+    if (postFx) postFx.render();
+    else renderer.render(scene, camera);
     requestAnimationFrame(tick);
   };
   tick();
