@@ -39,7 +39,9 @@ import { PostCheckPhase } from './simulation/phases/PostCheckPhase';
 import { CheckpointResumeSystem } from './simulation/CheckpointResumeSystem';
 import { ScoringSystem } from './engine/ScoringSystem';
 import { DataCenterAudio } from './audio/DataCenterAudio';
-import { buildTutorialLevel, ZoneManager } from './engine/TutorialLevel';
+import { buildTutorialLevelAsync, ZoneManager } from './engine/TutorialLevel';
+import { sharedAssetLoader } from './engine/AssetLoader';
+import { ToolViewmodel } from './fps/ToolViewmodel';
 import { UIManager } from './ui/UIManager';
 import { mountReactUi } from './ui/ReactUi';
 import { uiStore } from './ui/uiStore';
@@ -402,6 +404,8 @@ async function bootstrap(): Promise<void> {
   mountReactUi(uiRoot);
 
   const { renderer, scene, camera } = setupScene(container);
+  // 摄像机加入场景图，使其 child（如 ToolViewmodel）也参与渲染
+  scene.add(camera);
   const collision = new CollisionSystem();
 
   // 系统
@@ -418,13 +422,23 @@ async function bootstrap(): Promise<void> {
   const interaction = new InteractionSystem(player);
   interaction.attach();
 
-  // 构建教程关
-  const level = buildTutorialLevel(scene, collision, {
-    onCommandConsole: () => void flow.onCommandConsole(),
-    onNetworkConsole: () => void flow.onNetworkConsole(),
-    onStorageConsole: () => void flow.onStorageConsole(),
-    onCutoverConsole: () => void flow.onCutoverConsole(),
-  });
+  // 资产层 + 第一人称工具视图模型
+  const assets = sharedAssetLoader();
+  const toolViewmodel = new ToolViewmodel(camera, assets);
+  toolViewmodel.attach();
+
+  // 构建教程关（异步：尝试用 GLB 美化控制台/机柜，失败则保留占位）
+  const level = await buildTutorialLevelAsync(
+    scene,
+    collision,
+    {
+      onCommandConsole: () => void flow.onCommandConsole(),
+      onNetworkConsole: () => void flow.onNetworkConsole(),
+      onStorageConsole: () => void flow.onStorageConsole(),
+      onCutoverConsole: () => void flow.onCutoverConsole(),
+    },
+    { assets },
+  );
   const zoneManager = new ZoneManager(level.zones);
   player.registerInteractable(level.consoles.command);
   player.registerInteractable(level.consoles.network);
@@ -475,6 +489,7 @@ async function bootstrap(): Promise<void> {
     zoneManager.update(player);
     bob.apply(dt, player);
     tools.tick(dt);
+    toolViewmodel.update(dt);
     interaction.update();
     uiStore.patchHud({
       zone: player.state.currentZone,

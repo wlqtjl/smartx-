@@ -17,6 +17,7 @@
 import * as THREE from 'three';
 import type { PlayerController, DataCenterZone, InteractableObject } from '../fps/PlayerController';
 import type { CollisionSystem } from '../fps/CollisionSystem';
+import type { AssetLoader } from './AssetLoader';
 
 export interface RoomBounds {
   zone: DataCenterZone;
@@ -285,6 +286,7 @@ export function buildTutorialLevel(
   const addRack = (x: number, z: number): void => {
     const rack = new THREE.Mesh(new THREE.BoxGeometry(0.8, 2, 1.2), rackMat);
     rack.position.set(x, 1, z);
+    rack.userData['kind'] = 'placeholder_rack';
     scene.add(rack);
     collision.add({ box: new THREE.Box3().setFromObject(rack), solid: true });
   };
@@ -323,5 +325,111 @@ export class ZoneManager {
       }
     }
     // 不在任一房间内 → 默认走廊视作 COMMAND_POST（不切换，避免频繁 toggle）
+  }
+}
+
+// =============================================================================
+// 异步增强版：在占位关卡之上叠加 GLB 资产，替换控制台/机柜的视觉表现。
+// 业务逻辑（zones/consoles/interactable）保持不变。
+// =============================================================================
+
+export interface AsyncLevelOptions {
+  /** 资产加载器；缺省则跳过 GLB 强化，等价于纯占位版 */
+  assets?: AssetLoader;
+  /**
+   * 是否替换控制台 / 机柜外观。每项默认 true；
+   * 单元测试或低端渲染可关闭。
+   */
+  enhance?: {
+    consoles?: boolean;
+    racks?: boolean;
+  };
+}
+
+/**
+ * 异步增强版关卡构建：
+ *  1. 先调用同步 `buildTutorialLevel` 拿到完整可玩关卡（占位 mesh）。
+ *  2. 若提供 `assets`，并发加载 `console_terminal` / `rack` 资产，
+ *     成功的就把视觉替换为 GLB 实例（位置不变）。失败的保留占位。
+ *  3. 控制台的 `interactable` userData 仍挂在原来的 `screen` 子节点上，
+ *     `InteractionSystem` 不需要改。
+ */
+export async function buildTutorialLevelAsync(
+  scene: THREE.Scene,
+  collision: CollisionSystem,
+  callbacks: {
+    onCommandConsole: () => void;
+    onNetworkConsole: () => void;
+    onStorageConsole: () => void;
+    onCutoverConsole: () => void;
+  },
+  options: AsyncLevelOptions = {},
+): Promise<BuiltLevel> {
+  const built = buildTutorialLevel(scene, collision, callbacks);
+  const { assets } = options;
+  if (!assets) return built;
+
+  const enhanceConsoles = options.enhance?.consoles ?? true;
+  const enhanceRacks = options.enhance?.racks ?? true;
+
+  if (enhanceConsoles) {
+    // 并发把 4 个控制台外观替换为 GLB（保留 screen 子节点的 interactable userData）
+    await Promise.all(
+      Object.values(built.consoles).map((screen) => decorateConsole(scene, assets, screen)),
+    );
+  }
+
+  if (enhanceRacks) {
+    await decorateRacks(scene, assets);
+  }
+
+  return built;
+}
+
+/**
+ * 给 `addConsole` 创建的占位组挂上一份 GLB "外壳"，
+ * 不动 collision box（沿用占位 base 的 box），不动 interactable screen。
+ */
+async function decorateConsole(
+  scene: THREE.Scene,
+  assets: AssetLoader,
+  screen: THREE.Object3D,
+): Promise<void> {
+  // screen.parent 是 addConsole 里创建的 group
+  const group = screen.parent;
+  if (!group) return;
+  const inst = await assets.instantiate('console_terminal');
+  if (!inst) return; // 占位继续生效
+  // 把 GLB 模型放到 group 内，与 base 同级；让 base 不可见但保留 collision/screen 锚点
+  inst.name = 'console_terminal_model';
+  group.add(inst);
+  group.traverse((o) => {
+    if ((o as THREE.Mesh).isMesh && o.name === '' && o !== inst && o !== screen) {
+      // 占位 base 的 mesh 没设 name，用条件隐去
+      (o as THREE.Mesh).visible = false;
+    }
+  });
+}
+
+/**
+ * 把网络间 / 存储间的若干装饰机柜替换为 GLB 实例。
+ * 同样不动 collision —— 占位 box 原本就标记了体积。
+ */
+async function decorateRacks(scene: THREE.Scene, assets: AssetLoader): Promise<void> {
+  const inst = await assets.instantiate('rack');
+  if (!inst) return;
+
+  // 找出场景中名为 'placeholder_rack' 的节点（在同步版本中我们仅给装饰机柜命名）。
+  // 注意：addRack 旧版本未命名，这里通过用户数据判定。
+  const targets: THREE.Object3D[] = [];
+  scene.traverse((o) => {
+    if (o.userData['kind'] === 'placeholder_rack') targets.push(o);
+  });
+  for (const t of targets) {
+    const replacement = inst.clone(true);
+    replacement.position.copy(t.position);
+    replacement.rotation.copy(t.rotation);
+    scene.add(replacement);
+    t.visible = false;
   }
 }
