@@ -19,6 +19,10 @@ import type {
   StorageMismatchWarning,
 } from '../simulation/phases/StorageMappingPhase';
 import type { SyncChallenge, ChallengeResponse } from '../simulation/phases/DataSyncPhase';
+import type {
+  InjectedFault,
+  FaultResolution,
+} from '../simulation/phases/FaultInjectionPhase';
 import type { ScoreBreakdown } from '../engine/ScoringSystem';
 import { EventBus } from '../core/EventBus';
 import { uiStore } from './uiStore';
@@ -35,6 +39,13 @@ export interface StorageSubmission {
   rdma: boolean;
 }
 
+/** 玩家在故障面板上对单条故障的选择 */
+export interface FaultChoice {
+  faultId: string;
+  /** 'use' = 用故障的 requiredTool 修复；'ignore' = 主动忽略 */
+  action: 'use' | 'ignore';
+}
+
 class UIManagerImpl {
   private pendingLogin: Resolver<VCenterCredential> | null = null;
   private pendingCompat: Resolver<void> | null = null;
@@ -42,6 +53,7 @@ class UIManagerImpl {
   private pendingNetwork: Resolver<NetworkMappingSubmission> | null = null;
   private pendingStorage: Resolver<StorageSubmission> | null = null;
   private pendingChallenge: Resolver<ChallengeResponse> | null = null;
+  private pendingFaults: Resolver<FaultChoice[]> | null = null;
   private pendingChoice: Resolver<string> | null = null;
 
   /** vCenter 登录面板：返回玩家输入凭据 */
@@ -142,6 +154,28 @@ class UIManagerImpl {
     this.pendingChallenge = null;
     uiStore.closeChallenge();
     r?.(resp);
+  }
+
+  /**
+   * 故障注入面板：扫描后弹出。React 面板只收集"用工具 / 忽略"的二选一，
+   * 真正的 `FaultResolution` 由调用方（MigrationFlowController）通过
+   * `FaultInjectionPhase.resolve()` 计算，避免 UI 层重复业务规则。
+   */
+  showFaultInjectionPanel(faults: InjectedFault[]): Promise<FaultChoice[]> {
+    uiStore.openFaults(faults);
+    return new Promise((resolve) => {
+      this.pendingFaults = resolve;
+    });
+  }
+  /** UI 层用：累计单条故障的可视化结果（仅做面板展示，不影响业务计分） */
+  recordFaultResolution(res: FaultResolution): void {
+    uiStore.recordFaultResolution(res);
+  }
+  submitFaultChoices(choices: FaultChoice[]): void {
+    const r = this.pendingFaults;
+    this.pendingFaults = null;
+    uiStore.closeFaults();
+    r?.(choices);
   }
 
   /** 结算面板（非阻塞，仅显示） */

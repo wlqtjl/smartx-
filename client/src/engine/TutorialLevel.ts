@@ -63,6 +63,8 @@ function addWall(
   const geom = new THREE.BoxGeometry(w, ROOM.wallHeight, d);
   const mesh = new THREE.Mesh(geom, wallMat);
   mesh.position.set(x, ROOM.wallHeight / 2, z);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
   scene.add(mesh);
   collision.add({ box: new THREE.Box3().setFromObject(mesh), solid: true });
 }
@@ -129,9 +131,11 @@ function addConsole(
 
   const base = new THREE.Mesh(
     new THREE.BoxGeometry(1.2, 0.9, 0.6),
-    new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.8 }),
+    new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.8, metalness: 0.4 }),
   );
   base.position.y = 0.45;
+  base.castShadow = true;
+  base.receiveShadow = true;
   group.add(base);
 
   const screen = new THREE.Mesh(
@@ -199,6 +203,7 @@ export function buildTutorialLevel(
     );
     floor.rotation.x = -Math.PI / 2;
     floor.position.set(cx, 0, cz);
+    floor.receiveShadow = true;
     scene.add(floor);
     buildRoomWalls(scene, collision, cx, cz, r.doors);
 
@@ -217,6 +222,16 @@ export function buildTutorialLevel(
   scene.add(new THREE.HemisphereLight(0x99cfff, 0x0a1a2a, 0.55));
   const key = new THREE.DirectionalLight(0x88ccff, 0.45);
   key.position.set(5, 12, 5);
+  // 阴影：覆盖 3 间房 + 走廊范围；分辨率适中，避免 Mac 集显卡顿
+  key.castShadow = true;
+  key.shadow.mapSize.set(1024, 1024);
+  key.shadow.camera.near = 0.5;
+  key.shadow.camera.far = 50;
+  key.shadow.camera.left = -25;
+  key.shadow.camera.right = 25;
+  key.shadow.camera.top = 15;
+  key.shadow.camera.bottom = -15;
+  key.shadow.bias = -0.0005;
   scene.add(key);
 
   // 每间房的点光，给出区域化氛围
@@ -282,10 +297,14 @@ export function buildTutorialLevel(
     color: 0x2a2f3a,
     emissive: 0x002a4a,
     emissiveIntensity: 0.2,
+    metalness: 0.6,
+    roughness: 0.4,
   });
   const addRack = (x: number, z: number): void => {
     const rack = new THREE.Mesh(new THREE.BoxGeometry(0.8, 2, 1.2), rackMat);
     rack.position.set(x, 1, z);
+    rack.castShadow = true;
+    rack.receiveShadow = true;
     rack.userData['kind'] = 'placeholder_rack';
     scene.add(rack);
     collision.add({ box: new THREE.Box3().setFromObject(rack), solid: true });
